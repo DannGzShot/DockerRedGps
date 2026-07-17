@@ -273,6 +273,12 @@ El archivo `.env` no se sube al repositorio. Crea uno desde la plantilla:
 cp .env.example .env
 ```
 
+Si tu explorador de archivos no muestra `.env.example` por ser un archivo oculto, tambien hay una copia visible:
+
+```bash
+cp examples/env.example .env
+```
+
 Edita `.env` con valores de tu computadora y tus permisos:
 
 ```env
@@ -428,7 +434,27 @@ Si no tienes acceso remoto, crea una copia local desde la plantilla y completa l
 cp docker/php/redisCache.ini.example docker/php/redisCache.ini
 ```
 
+Tambien existe una copia visible en:
+
+```bash
+cp examples/redisCache.ini.example docker/php/redisCache.ini
+```
+
 No subas `docker/php/redisCache.ini`.
+
+Si tu entorno requiere `docker/var-cache/config/general.cfg`, crealo desde la plantilla:
+
+```bash
+cp docker/var-cache/config/general.cfg.example docker/var-cache/config/general.cfg
+```
+
+O usando la copia visible:
+
+```bash
+cp examples/general.cfg.example docker/var-cache/config/general.cfg
+```
+
+Edita `general.cfg` con valores autorizados. No subas `docker/var-cache/config/general.cfg`.
 
 ## 11. Setup rapido
 
@@ -574,6 +600,9 @@ Plantillas seguras que si se suben:
 .env.example
 docker/php/redisCache.ini.example
 docker/var-cache/config/general.cfg.example
+examples/env.example
+examples/redisCache.ini.example
+examples/general.cfg.example
 ```
 
 ## 17. Problemas comunes

@@ -1,0 +1,9 @@
+; Autor: DannGzShot
+; Fecha de creacion: 16/03/2026
+; Descripcion: Plantilla visible de configuracion Redis para contenedores locales.
+
+username = default
+host = your-redis-host
+tls = 1
+port = 25061
+password = your-redis-password
