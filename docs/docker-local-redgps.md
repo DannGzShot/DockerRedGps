@@ -13,6 +13,12 @@ El repositorio Docker contiene solamente la integracion de contenedores: `Docker
 Repositorio:
 
 ```bash
+https://github.com/DannGzShot/DockerRedGps.git
+```
+
+Si tu cuenta tiene una llave SSH configurada en GitHub, tambien puedes usar:
+
+```bash
 git@github.com:DannGzShot/DockerRedGps.git
 ```
 
@@ -85,7 +91,7 @@ sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 ```
 
-Cierra sesion y vuelve a entrar para que el grupo `docker` aplique. Luego valida:
+Para que el grupo `docker` aplique, normalmente basta con cerrar esa terminal y abrir una terminal nueva. No es necesario apagar la computadora. Si en la terminal nueva Docker sigue pidiendo `sudo`, entonces reinicia la sesion de usuario del sistema o reinicia la computadora. Luego valida:
 
 ```bash
 docker version
@@ -95,25 +101,34 @@ docker run --rm hello-world
 
 Para otras distribuciones Linux, usa la guia oficial de Docker Engine para tu distribucion.
 
-### macOS
-
-Opcion recomendada:
+### macOS con Homebrew
 
 ```bash
 brew install --cask docker
 open -a Docker
 ```
 
-Tambien puedes instalar Docker Desktop manualmente desde la documentacion oficial de Docker. Despues de abrir Docker Desktop, valida:
+Despues de abrir la aplicacion de Docker y esperar a que termine de iniciar, valida:
 
 ```bash
 docker version
 docker compose version
 ```
 
-## 3. Clonar el repositorio Docker
+## 3. Clonar o instalar el repositorio Docker
 
-Clona este repo como carpeta base de trabajo:
+### Opcion A: carpeta `work/` nueva o vacia
+
+Usa HTTPS por defecto. Esta opcion no requiere llave SSH de GitHub si el repositorio es publico:
+
+```bash
+mkdir -p ~/Documentos/work
+cd ~/Documentos
+git clone https://github.com/DannGzShot/DockerRedGps.git work
+cd work
+```
+
+Si prefieres SSH y ya tienes tu llave registrada en GitHub:
 
 ```bash
 mkdir -p ~/Documentos/work
@@ -122,11 +137,104 @@ git clone git@github.com:DannGzShot/DockerRedGps.git work
 cd work
 ```
 
-Si ya tienes una carpeta `work/` con los repos `dev`, `qa` o `master`, clona el repo Docker en una carpeta temporal y copia solo los archivos de integracion a tu carpeta global, o inicializa la carpeta global con este repo antes de clonar los repos de aplicacion.
+### Opcion B: ya existe `work/` con `dev`, `qa`, `master` u otros archivos
+
+No ejecutes `git clone ... work` si `work/` ya existe y tiene archivos, porque Git puede devolver error al no estar vacia. La opcion mas segura es clonar en una carpeta temporal y copiar el contenido al directorio `work/`.
+
+Con HTTPS:
+
+```bash
+mkdir -p ~/tmp
+cd ~/tmp
+rm -rf DockerRedGps
+git clone https://github.com/DannGzShot/DockerRedGps.git DockerRedGps
+
+rsync -av --exclude='.git' DockerRedGps/ ~/Documentos/work/
+cd ~/Documentos/work
+```
+
+Con SSH:
+
+```bash
+mkdir -p ~/tmp
+cd ~/tmp
+rm -rf DockerRedGps
+git clone git@github.com:DannGzShot/DockerRedGps.git DockerRedGps
+
+rsync -av --exclude='.git' DockerRedGps/ ~/Documentos/work/
+cd ~/Documentos/work
+```
+
+Si quieres crear la carpeta temporal y clonar dentro usando punto al final:
+
+```bash
+mkdir -p ~/tmp/DockerRedGps
+cd ~/tmp/DockerRedGps
+git clone https://github.com/DannGzShot/DockerRedGps.git .
+rsync -av --exclude='.git' ./ ~/Documentos/work/
+cd ~/Documentos/work
+```
+
+El comando `rsync` copia solamente los archivos del repo Docker y conserva tus carpetas existentes. Si algun archivo Docker ya existe en `work/`, sera actualizado.
+
+### Nota sobre el error `Permission denied (publickey)`
+
+Si intentas clonar por SSH y aparece:
+
+```text
+git@github.com: Permission denied (publickey).
+fatal: No se pudo leer del repositorio remoto.
+```
+
+significa que esa computadora no tiene una llave SSH registrada en GitHub, o GitHub no reconoce esa llave para tu usuario. Para este repositorio de pruebas, usa HTTPS:
+
+```bash
+git clone https://github.com/DannGzShot/DockerRedGps.git
+```
+
+Usa SSH solo si ya configuraste tu llave publica en GitHub y validaste:
+
+```bash
+ssh -T git@github.com
+```
 
 ## 4. Preparar repositorios de aplicacion
 
 Este repo no incluye `dev`, `qa`, `master` ni el codigo de las aplicaciones. Deben existir al mismo nivel que `docker-compose.yml`.
+
+Vista esperada despues de instalar DockerRedGps sobre tu carpeta global:
+
+```text
+work/
+├── docker-compose.yml
+├── Dockerfile
+├── Makefile
+├── .env.example
+├── docker/
+├── docs/
+├── dataservice/
+├── dev/
+├── qa/
+└── master/
+```
+
+Dentro de `dev/` y `qa/` se esperan los repos o carpetas usados por los volumenes de Docker:
+
+```text
+dev/
+├── atomic/
+├── commons/
+├── partners/
+├── redgps/
+└── reportes/
+
+qa/
+├── atomic/
+├── commons/
+├── partners/
+├── redgps/
+└── reportes/
+```
 
 Ejemplo:
 
@@ -543,4 +651,3 @@ https://qa.redgps.local:8001/
 
 - Docker Engine para Linux: https://docs.docker.com/engine/install/
 - Docker Engine en Ubuntu: https://docs.docker.com/engine/install/ubuntu/
-- Docker Desktop para macOS: https://docs.docker.com/desktop/setup/install/mac-install/
