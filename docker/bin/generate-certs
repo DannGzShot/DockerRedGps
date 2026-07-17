@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Autor: DannGzShot
+# Fecha de creacion: 16/03/2026
+# Descripcion: Genera CA y certificados locales para HTTPS en el entorno Docker.
+
+set -euo pipefail
+
+cert_dir="${CERT_DIR:-docker/apache/certs}"
+openssl_config="${OPENSSL_CONFIG:-docker/apache/dev-redgps-local.openssl.cnf}"
+force="${FORCE:-0}"
+ca_days="${CA_DAYS:-3650}"
+cert_days="${CERT_DAYS:-825}"
+
+ca_key="$cert_dir/redgps-local-dev-ca.key"
+ca_crt="$cert_dir/redgps-local-dev-ca.crt"
+ca_serial="$cert_dir/redgps-local-dev-ca.srl"
+server_key="$cert_dir/dev.redgps.local.key"
+server_csr="$cert_dir/dev.redgps.local.csr"
+server_crt="$cert_dir/dev.redgps.local.crt"
+
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "openssl no esta instalado o no esta disponible en PATH." >&2
+  exit 1
+fi
+
+if [[ ! -f "$openssl_config" ]]; then
+  echo "No existe la configuracion OpenSSL: $openssl_config" >&2
+  exit 1
+fi
+
+mkdir -p "$cert_dir"
+
+ca_changed=0
+if [[ "$force" == "1" || ! -f "$ca_key" || ! -f "$ca_crt" ]]; then
+  echo "Generando CA local: $ca_crt"
+  openssl req \
+    -x509 \
+    -nodes \
+    -newkey rsa:4096 \
+    -days "$ca_days" \
+    -keyout "$ca_key" \
+    -out "$ca_crt" \
+    -subj "/C=MX/ST=Local/L=Local/O=RedGPS Local Development/OU=Development/CN=RedGPS Local Development CA"
+  ca_changed=1
+else
+  echo "CA local existente: $ca_crt"
+fi
+
+if [[ "$force" == "1" || "$ca_changed" == "1" || ! -f "$server_key" || ! -f "$server_crt" ]]; then
+  echo "Generando certificado local: $server_crt"
+  rm -f "$server_csr" "$ca_serial"
+
+  openssl req \
+    -new \
+    -nodes \
+    -newkey rsa:2048 \
+    -keyout "$server_key" \
+    -out "$server_csr" \
+    -config "$openssl_config"
+
+  openssl x509 \
+    -req \
+    -in "$server_csr" \
+    -CA "$ca_crt" \
+    -CAkey "$ca_key" \
+    -CAcreateserial \
+    -out "$server_crt" \
+    -days "$cert_days" \
+    -sha256 \
+    -extensions req_ext \
+    -extfile "$openssl_config"
+else
+  echo "Certificado local existente: $server_crt"
+fi
+
+chmod 600 "$ca_key" "$server_key"
+chmod 644 "$ca_crt" "$server_crt"
+[[ -f "$server_csr" ]] && chmod 644 "$server_csr"
+[[ -f "$ca_serial" ]] && chmod 644 "$ca_serial"
+
+openssl verify -CAfile "$ca_crt" "$server_crt" >/dev/null
+
+echo "Certificados listos."
+echo "Para confiar la CA en Linux, ejecuta: make certs-install-linux"

@@ -1,0 +1,8 @@
+; Autor: DannGzShot
+; Fecha de creacion: 16/03/2026
+; Descripcion: Plantilla de configuracion Redis para contenedores locales.
+
+host = ""
+port = 6379
+password = ""
+tls = 0

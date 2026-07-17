@@ -1,0 +1,63 @@
+# Entorno local y secretos
+.env
+.env.*
+!.env.example
+!**/.env.example
+!**/.env.*.example
+
+# Configuraciones reales generadas desde servidores
+**/redisCache.ini
+!**/redisCache.ini.example
+**/var-cache/**/*.cfg
+!**/var-cache/**/*.cfg.example
+
+# Llaves SSH y hosts locales
+**/docker/ssh/*
+!**/docker/ssh/.gitkeep
+id_rsa
+id_rsa.*
+known_hosts
+
+# Certificados, llaves y artefactos criptograficos locales
+**/docker/apache/certs/*
+!**/docker/apache/certs/.gitkeep
+*.key
+*.pem
+*.p12
+*.pfx
+*.csr
+*.srl
+
+# Runtime/cache generado por Docker
+docker/runtime/**
+!docker/runtime/**/
+!docker/runtime/**/.gitkeep
+master/docker/runtime/**
+!master/docker/runtime/**/
+!master/docker/runtime/**/.gitkeep
+docker/var-cache/**
+!docker/var-cache/**/
+!docker/var-cache/**/.gitkeep
+!docker/var-cache/**/*.example
+master/docker/var-cache/**
+!master/docker/var-cache/**/
+!master/docker/var-cache/**/.gitkeep
+!master/docker/var-cache/**/*.example
+
+# Datos operativos generados por dataservice
+dataservice/equipos_json/
+dataservice/json_last_with_ignition_off/
+dataservice/logs*/
+dataservice/empty_data/*.json
+master/dataservice/equipos_json/
+master/dataservice/json_last_with_ignition_off/
+master/dataservice/logs*/
+master/dataservice/empty_data/*.json
+
+# Credenciales de proveedores externos
+google-credentials*.json
+**/secrets/
+*.secret.json
+
+# Backups locales
+docker/legacy-dev-docker-backup-*/

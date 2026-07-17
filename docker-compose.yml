@@ -1,0 +1,96 @@
+# Autor: DannGzShot
+# Fecha de creacion: 16/03/2026
+# Descripcion: Orquesta los servicios web DEV, QA y gateway del entorno Docker local REDGPS.
+
+x-local-logging: &local-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    image: redgps-local-php:7.3
+    container_name: redgps_web
+    restart: unless-stopped
+    network_mode: host
+    logging: *local-logging
+    command: apache2-foreground
+    depends_on:
+      - dev_web
+      - qa_web
+    volumes:
+      - ./:/home/git/repositorios
+      - ./docker/var-cache:/var/cache
+      - ./docker/runtime/template_c/gateway:/var/www/html/web/template_c
+      - ./docker/apache/redgps.gateway.conf:/etc/apache2/sites-available/redgps.local.conf:ro
+      - ./docker/apache/ports.gateway.conf:/etc/apache2/ports.conf:ro
+      - ./docker/apache/certs:/etc/ssl/localcerts:ro
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/99-local.ini:ro
+
+  dev_web:
+    image: redgps-local-php:7.3
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    container_name: redgps_dev_web
+    restart: unless-stopped
+    network_mode: host
+    logging: *local-logging
+    command: apache2-foreground
+    volumes:
+      - ./:/home/git/repositorios
+      - ./dev/redgps:/var/www/html/web/redgps
+      - ./dev/partners:/var/www/html/web/partners
+      - ./dev/reportes:/var/www/html/web/reportes
+      - ./dev/atomic:/var/www/html/web/atomic
+      - ./dev/commons:/home/redgps/commons
+      - ./docker/var-cache:/var/cache
+      - ./docker/runtime/template_c/dev:/var/www/html/web/template_c
+      - ./docker/apache/redgps.backend.dev.conf:/etc/apache2/sites-available/redgps.local.conf:ro
+      - ./docker/apache/ports.dev.conf:/etc/apache2/ports.conf:ro
+      - ./docker/apache/certs:/etc/ssl/localcerts:ro
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/99-local.ini:ro
+      - ./docker/php/redisCache.ini:/home/redgps/redisCache.ini:ro
+      - ./dataservice:/var/www/html/web/dataservice
+
+  qa_web:
+    image: redgps-local-php:7.3
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    container_name: redgps_qa_web
+    restart: unless-stopped
+    network_mode: host
+    logging: *local-logging
+    command: apache2-foreground
+    volumes:
+      - ./:/home/git/repositorios
+      - ./qa/redgps:/var/www/html/web/redgps
+      - ./qa/partners:/var/www/html/web/partners
+      - ./qa/reportes:/var/www/html/web/reportes
+      - ./qa/atomic:/var/www/html/web/atomic
+      - ./qa/commons:/home/redgps/commons
+      - ./docker/var-cache:/var/cache
+      - ./docker/runtime/template_c/qa:/var/www/html/web/template_c
+      - ./docker/apache/redgps.backend.qa.conf:/etc/apache2/sites-available/redgps.local.conf:ro
+      - ./docker/apache/ports.qa.conf:/etc/apache2/ports.conf:ro
+      - ./docker/apache/certs:/etc/ssl/localcerts:ro
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/99-local.ini:ro
+      - ./docker/php/redisCache.ini:/home/redgps/redisCache.ini:ro
+      - ./dataservice:/var/www/html/web/dataservice

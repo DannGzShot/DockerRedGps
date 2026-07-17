@@ -1,0 +1,31 @@
+# Autor: DannGzShot
+# Fecha de creacion: 16/03/2026
+# Descripcion: Define datos y SAN para generar certificados HTTPS locales de REDGPS.
+
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+req_extensions = req_ext
+
+[dn]
+C = MX
+ST = Local
+L = Local
+O = RedGPS Local Development
+OU = Development
+CN = dev.redgps.local
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = dev.redgps.local
+DNS.2 = localhost
+DNS.3 = dev.reportes.local
+DNS.4 = dev.partners.local
+DNS.5 = qa.redgps.local
+DNS.6 = qa.reportes.local
+DNS.7 = qa.partners.local
+IP.1 = 127.0.0.1

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Autor: DannGzShot
+# Fecha de creacion: 16/03/2026
+# Descripcion: Muestra logs por ambiente desde Docker Compose.
+
+set -euo pipefail
+
+environment="${1:-dev}"
+kind="${2:-full}"
+tail_lines="${TAIL:-100}"
+
+case "$environment" in
+  dev)
+    service="dev_web"
+    ;;
+  qa)
+    service="qa_web"
+    ;;
+  gateway|web)
+    service="web"
+    ;;
+  master)
+    echo "MASTER no esta integrado en este docker-compose. Comandos preparados, sin servicio activo." >&2
+    exit 1
+    ;;
+  *)
+    echo "Ambiente invalido: $environment. Usa dev, qa, gateway o master." >&2
+    exit 1
+    ;;
+esac
+
+case "$kind" in
+  full)
+    exec docker compose logs -f --tail="$tail_lines" "$service"
+    ;;
+  apache)
+    exec docker compose logs -f --tail="$tail_lines" "$service"
+    ;;
+  php|web)
+    exec docker compose logs -f --tail="$tail_lines" "$service"
+    ;;
+  cli)
+    echo "No hay un servicio CLI separado para $environment; mostrando logs del backend $service." >&2
+    exec docker compose logs -f --tail="$tail_lines" "$service"
+    ;;
+  *)
+    echo "Tipo de log invalido: $kind. Usa apache, php, web, cli o full." >&2
+    exit 1
+    ;;
+esac

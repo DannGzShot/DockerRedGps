@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Autor: DannGzShot
+# Fecha de creacion: 16/03/2026
+# Descripcion: Limpia logs de contenedores locales y reinicia servicios cuando aplica.
+
+set -euo pipefail
+
+environment="${1:-all}"
+
+case "$environment" in
+  all)
+    containers=(redgps_web redgps_dev_web redgps_qa_web)
+    services=(web dev_web qa_web)
+    ;;
+  dev)
+    containers=(redgps_dev_web)
+    services=(dev_web)
+    ;;
+  qa)
+    containers=(redgps_qa_web)
+    services=(qa_web)
+    ;;
+  gateway|web)
+    containers=(redgps_web)
+    services=(web)
+    ;;
+  master)
+    echo "MASTER no esta integrado en este docker-compose. No hay logs locales que limpiar." >&2
+    exit 1
+    ;;
+  *)
+    echo "Ambiente invalido: $environment. Usa all, dev, qa, gateway o master." >&2
+    exit 1
+    ;;
+esac
+
+logs_cleared=0
+
+for container in "${containers[@]}"; do
+  if ! log_path="$(docker inspect --format='{{.LogPath}}' "$container" 2>&1)"; then
+    echo "No se pudo obtener el log de $container:" >&2
+    echo "$log_path" >&2
+    continue
+  fi
+
+  if [[ -z "$log_path" || "$log_path" == "<no value>" ]]; then
+    echo "Sin log activo para $container."
+    continue
+  fi
+
+  echo "Limpiando $container: $log_path"
+  sudo truncate -s 0 "$log_path"
+  logs_cleared=1
+done
+
+if [[ "$logs_cleared" -eq 1 ]]; then
+  echo "Reiniciando servicio(s) para reabrir logs: ${services[*]}"
+  docker compose restart "${services[@]}"
+fi
