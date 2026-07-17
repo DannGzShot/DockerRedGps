@@ -1,7 +1,0 @@
-# Autor: DannGzShot
-# Fecha de creacion: 16/03/2026
-# Descripcion: Plantilla visible de configuracion MySQL para archivos cache locales.
-
-[MYSQL]
-user = your_mysql_user
-password = 'your_mysql_password'
