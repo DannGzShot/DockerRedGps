@@ -44,6 +44,11 @@ master/docker/var-cache/**
 !master/docker/var-cache/**/.gitkeep
 !master/docker/var-cache/**/*.example
 
+# Artefactos generados por Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
 # Datos operativos generados por dataservice
 dataservice/equipos_json/
 dataservice/json_last_with_ignition_off/
