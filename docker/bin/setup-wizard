@@ -24,6 +24,17 @@ EXPECTED_HOSTS = [
     "qa.partners.local",
 ]
 
+SSH_REQUIRED_ALIASES = {
+    "dev": {
+        "hostname": "137.184.178.190",
+        "port": "6611",
+    },
+    "qa": {
+        "hostname": "164.90.145.86",
+        "port": "6611",
+    },
+}
+
 APP_REQUIRED_PATHS = [
     "dataservice",
     "dev/redgps/public/index.php",
@@ -36,6 +47,13 @@ APP_REQUIRED_PATHS = [
     "qa/reportes/public/index.php",
     "qa/atomic",
     "qa/commons",
+]
+
+APP_OPTIONAL_PATHS = [
+    "dev/alertas",
+    "dev/api",
+    "qa/alertas",
+    "qa/api",
 ]
 
 APP_HTACCESS_FILES = [
@@ -321,6 +339,17 @@ class Wizard:
         else:
             self.ok("Estructura base de aplicaciones completa")
 
+        optional_missing = [path for path in APP_OPTIONAL_PATHS if not self.rel(path).exists()]
+        optional_present = [path for path in APP_OPTIONAL_PATHS if self.rel(path).exists()]
+        if optional_present:
+            self.info("Repos auxiliares encontrados: " + ", ".join(optional_present))
+        if optional_missing:
+            self.info(
+                "Repos auxiliares no montados por este docker-compose: "
+                + ", ".join(optional_missing)
+                + ". Clonalos solo si tu flujo los usa directamente."
+            )
+
     def check_env_files(self) -> None:
         self.step("Revisando archivos locales y plantillas")
         env_path = self.rel(".env")
@@ -340,7 +369,10 @@ class Wizard:
             for key in ["SSHUTTLE_REMOTE", "SSH_TUNNEL_HOST"]:
                 value = env_values.get(key, "")
                 if not value:
-                    self.warn(f"{key} no esta definido en .env")
+                    if key == "SSHUTTLE_REMOTE":
+                        self.info("SSHUTTLE_REMOTE no esta definido en .env; se usara qa por defecto")
+                    else:
+                        self.warn(f"{key} no esta definido en .env")
                 elif value in PLACEHOLDER_VALUES:
                     self.warn(f"{key} sigue con valor de ejemplo: {value}")
                 else:
@@ -537,22 +569,63 @@ class Wizard:
         ssh_config = Path.home() / ".ssh" / "config"
         if ssh_config.exists():
             self.ok("~/.ssh/config existe")
+            self.check_ssh_identityfile_paths(ssh_config)
         else:
             self.warn("Falta ~/.ssh/config")
 
         if self.command_exists("ssh"):
-            ssh_g = self.run(["ssh", "-F", str(ssh_config), "-G", "qa"], timeout=20)
-            if ssh_g.returncode == 0:
-                self.ok("Alias SSH qa se puede leer con ssh -G")
-                ssh_values = parse_ssh_config_output(ssh_g.stdout)
-                host = ssh_values.get("hostname", "")
-                port = ssh_values.get("port", "")
-                if host and port:
-                    self.ok(f"make vpn-qa excluira el endpoint SSH {host}:{port}")
+            for alias, expected in SSH_REQUIRED_ALIASES.items():
+                ssh_g = self.run(["ssh", "-F", str(ssh_config), "-G", alias], timeout=20)
+                if ssh_g.returncode == 0:
+                    self.ok(f"Alias SSH {alias} se puede leer con ssh -G")
+                    ssh_values = parse_ssh_config_output(ssh_g.stdout)
+                    ssh_lists = parse_ssh_config_output_lists(ssh_g.stdout)
+                    host = ssh_values.get("hostname", "")
+                    port = ssh_values.get("port", "")
+                    user = ssh_values.get("user", "")
+                    if host == expected["hostname"] and port == expected["port"]:
+                        self.ok(f"{alias} apunta a {host}:{port}")
+                    elif host and port:
+                        self.warn(
+                            f"{alias} apunta a {host}:{port}, pero se esperaba "
+                            f"{expected['hostname']}:{expected['port']}."
+                        )
+                    else:
+                        self.warn(f"No pude calcular HostName/Port del alias {alias}.")
+                    if user:
+                        self.info(f"Usuario SSH para {alias}: {user}")
+                    identity_files = ssh_lists.get("identityfile", [])
+                    existing_identities = [path for path in identity_files if Path(path).exists()]
+                    root_identities = [path for path in identity_files if path.startswith("/root/")]
+                    if root_identities:
+                        self.warn(
+                            f"{alias} intenta usar llaves de root: {', '.join(root_identities)}. "
+                            "No ejecutes sshuttle con sudo directo."
+                        )
+                    elif existing_identities:
+                        self.ok(f"{alias} tiene llave SSH accesible: {existing_identities[0]}")
+                    elif identity_files:
+                        self.warn(f"Ninguna llave IdentityFile existe para {alias}: {', '.join(identity_files)}")
+                    else:
+                        self.warn(f"{alias} no declara IdentityFile; SSH usara llaves por defecto.")
                 else:
-                    self.warn("No pude calcular HostName/Port del alias qa para excluirlo del tunel.")
-            else:
-                self.warn("No pude leer el alias SSH qa. Revisa ~/.ssh/config.")
+                    self.warn(f"No pude leer el alias SSH {alias}. Revisa ~/.ssh/config.")
+
+        vpn_preview = self.run(["make", "-n", "vpn-qa"], timeout=20)
+        if vpn_preview.returncode == 0:
+            preview = " ".join(vpn_preview.stdout.strip().split())
+            if preview.startswith("sudo sshuttle"):
+                self.warn("make vpn-qa ejecuta sudo sshuttle; eso puede hacer que SSH busque llaves en /root.")
+            elif preview.startswith("sshuttle"):
+                self.ok("make vpn-qa ejecuta sshuttle como usuario normal")
+                self.info("sshuttle pedira sudo solo para rutas/firewall cuando sea necesario.")
+            if "/root/.ssh" in preview:
+                self.warn("make vpn-qa contiene rutas /root/.ssh; revisa SSH_CONFIG.")
+            elif str(ssh_config) in preview:
+                self.ok(f"make vpn-qa usa SSH_CONFIG={ssh_config}")
+            self.info("Comando vpn-qa: " + preview)
+        else:
+            self.warn(f"No pude previsualizar make vpn-qa: {last_line(vpn_preview.stderr or vpn_preview.stdout)}")
 
         if self.command_exists("sshuttle"):
             self.ok("sshuttle disponible para make vpn-qa")
@@ -560,6 +633,26 @@ class Wizard:
             self.warn("sshuttle no esta instalado")
 
         self.info("make vpn-qa debe quedarse abierto mientras uses servicios remotos de QA.")
+
+    def check_ssh_identityfile_paths(self, ssh_config: Path) -> None:
+        content = self.read_text(ssh_config)
+        fixed_content, changes = normalize_ssh_identity_paths(
+            content,
+            Path.home(),
+            SSH_REQUIRED_ALIASES.keys(),
+        )
+        if not changes:
+            self.ok("IdentityFile de dev/qa no usa rutas dependientes de root")
+            return
+
+        for change in changes:
+            self.warn(change)
+        self.info("Usa rutas absolutas para IdentityFile; funcionan igual en Linux, Fedora, Ubuntu, Mint y macOS.")
+        if self.ask("Normalizar IdentityFile de dev/qa en ~/.ssh/config?"):
+            backup = ssh_config.with_name("config.redgps.bak")
+            shutil.copy2(ssh_config, backup)
+            self.write_text(ssh_config, fixed_content)
+            self.action(f"Normalizado ~/.ssh/config; respaldo creado en {backup}")
 
     def check_docker_runtime(self) -> None:
         self.step("Revisando Docker Compose y contenedores")
@@ -686,6 +779,80 @@ def parse_ssh_config_output(text: str) -> Dict[str, str]:
         if len(parts) == 2:
             values[parts[0].lower()] = parts[1]
     return values
+
+
+def parse_ssh_config_output_lists(text: str) -> Dict[str, List[str]]:
+    values: Dict[str, List[str]] = {}
+    for line in text.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            values.setdefault(parts[0].lower(), []).append(parts[1])
+    return values
+
+
+def normalize_ssh_identity_paths(
+    text: str,
+    home: Path,
+    aliases: Iterable[str],
+) -> Tuple[str, List[str]]:
+    target_aliases = set(aliases)
+    current_aliases: List[str] = []
+    changes: List[str] = []
+    output: List[str] = []
+
+    for raw_line in text.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        newline = raw_line[len(line):]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            output.append(raw_line)
+            continue
+
+        parts = stripped.split(None, 1)
+        key = parts[0].lower()
+        value = parts[1].strip() if len(parts) == 2 else ""
+
+        if key == "host":
+            patterns = value.split()
+            current_aliases = [alias for alias in target_aliases if alias in patterns]
+            output.append(raw_line)
+            continue
+
+        if key != "identityfile" or not current_aliases or not value:
+            output.append(raw_line)
+            continue
+
+        quote = value[0] if value[:1] in {"'", '"'} else ""
+        unquoted = value.strip("'\"")
+        normalized = normalize_identity_value(unquoted, home)
+        if normalized == unquoted:
+            output.append(raw_line)
+            continue
+
+        indent = line[: len(line) - len(line.lstrip())]
+        replacement_value = f"{quote}{normalized}{quote}" if quote else normalized
+        output.append(f"{indent}IdentityFile {replacement_value}{newline}")
+        aliases_text = ", ".join(current_aliases)
+        changes.append(f"IdentityFile de {aliases_text} usa {value}; se normalizara a {normalized}")
+
+    return "".join(output), changes
+
+
+def normalize_identity_value(value: str, home: Path) -> str:
+    if value == "~":
+        return str(home)
+    if value.startswith("~/"):
+        return str(home / value[2:])
+    if value.startswith("$HOME/"):
+        return str(home / value[6:])
+    if value.startswith("${HOME}/"):
+        return str(home / value[8:])
+    if value.startswith("%d/"):
+        return str(home / value[3:])
+    path = Path(value)
+    if path.is_absolute() or value.startswith("%"):
+        return value
+    return str(home / value)
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:

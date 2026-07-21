@@ -6,7 +6,8 @@
 export
 
 SSHUTTLE_REMOTE ?= qa
-SSH_CONFIG ?= $$HOME/.ssh/config
+SSH_CONFIG ?= $(shell printf '%s/.ssh/config' "$$HOME")
+SSHUTTLE_SSH_CMD ?= ssh -F $(SSH_CONFIG)
 SSHUTTLE_EXCLUDE_HOST ?= $(shell ssh -F "$(SSH_CONFIG)" -G "$(SSHUTTLE_REMOTE)" 2>/dev/null | awk '$$1 == "hostname" {print $$2; exit}')
 SSHUTTLE_EXCLUDE_PORT ?= $(shell ssh -F "$(SSH_CONFIG)" -G "$(SSHUTTLE_REMOTE)" 2>/dev/null | awk '$$1 == "port" {print $$2; exit}')
 SSH_TUNNEL_EXCLUDE_HOST ?= $(if $(SSHUTTLE_EXCLUDE_HOST),$(SSHUTTLE_EXCLUDE_HOST),$(or $(SSH_TUNNEL_HOST),127.0.0.1))
@@ -203,7 +204,7 @@ certs-install-mac:
 	sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain docker/apache/certs/redgps-local-dev-ca.crt
 
 redis-config-qa:
-	scp -F $$HOME/.ssh/config $(SSHUTTLE_REMOTE):$(REDIS_REMOTE_PATH) $(REDIS_LOCAL_PATH)
+	scp -F $(SSH_CONFIG) $(SSHUTTLE_REMOTE):$(REDIS_REMOTE_PATH) $(REDIS_LOCAL_PATH)
 
 setup-qa:
 	$(MAKE) install-tools
@@ -214,4 +215,4 @@ setup-qa:
 	$(MAKE) build
 
 vpn-qa:
-	sudo sshuttle $(SSHUTTLE_FLAGS) -r $(SSHUTTLE_REMOTE) -e "ssh -F $(SSH_CONFIG)" -x $(SSHUTTLE_EXCLUDE_REMOTE) -x $(SSHUTTLE_LOOPBACK_EXCLUDE) $(SSHUTTLE_ROUTES)
+	sshuttle $(SSHUTTLE_FLAGS) -r $(SSHUTTLE_REMOTE) -e "$(SSHUTTLE_SSH_CMD)" -x $(SSHUTTLE_EXCLUDE_REMOTE) -x $(SSHUTTLE_LOOPBACK_EXCLUDE) $(SSHUTTLE_ROUTES)

@@ -238,6 +238,8 @@ qa/
 └── reportes/
 ```
 
+Repos como `alertas/` y `api/` pueden existir dentro de `dev/` o `qa`, pero el `docker-compose.yml` actual no los monta como volumenes. Clonalos solo si tu flujo los usa directamente o si otro modulo te los pide.
+
 Ejemplo:
 
 ```bash
@@ -320,8 +322,10 @@ SSH_TUNNEL_PORT=6611
 SSH_TUNNEL_LOCAL_PORT=3306
 SSH_TUNNEL_REMOTE_DB_HOST=127.0.0.1
 SSH_TUNNEL_REMOTE_DB_PORT=3306
-SSH_TUNNEL_EXCLUDE_HOST=your-ssh-host
 SSHUTTLE_REMOTE=qa
+SSHUTTLE_FLAGS=--dns
+SSHUTTLE_ROUTES=0/0
+SSHUTTLE_LOOPBACK_EXCLUDE=127.0.0.1/32
 
 REDIS_REMOTE_PATH=/home/redgps/redisCache.ini
 REDIS_LOCAL_PATH=docker/php/redisCache.ini
@@ -340,12 +344,25 @@ Host *
     PubkeyAcceptedKeyTypes +ssh-rsa
 
 Host qa
-    HostName <qa-public-host-or-ip>
+    HostName 164.90.145.86
     User <ssh-user>
     Port 6611
-    IdentityFile ~/.ssh/id_rsa
+    IdentityFile /home/<linux-user>/.ssh/id_rsa
     IdentitiesOnly yes
+    UserKnownHostsFile /home/<linux-user>/.ssh/known_hosts
+
+Host dev
+    HostName 137.184.178.190
+    User <ssh-user>
+    Port 6611
+    IdentityFile /home/<linux-user>/.ssh/id_rsa
+    IdentitiesOnly yes
+    UserKnownHostsFile /home/<linux-user>/.ssh/known_hosts
 ```
+
+En macOS cambia `/home/<linux-user>/...` por `/Users/<mac-user>/...`.
+
+Evita `IdentityFile ~/.ssh/id_rsa` en estos aliases. `ssh qa` puede funcionar asi, pero si algun comando se ejecuta con `sudo`, `~` puede resolverse como `/root` y provocar errores como `no such identity: /root/.ssh/id_rsa`.
 
 Valida:
 
@@ -440,7 +457,7 @@ El asistente revisa:
 - VirtualHosts Docker.
 - `.htaccess` de las aplicaciones.
 - Permisos y propietarios de archivos locales.
-- SSH, `sshuttle` y resolucion de hosts remotos desde el contenedor.
+- SSH, `sshuttle`, aliases `dev/qa`, rutas absolutas de `IdentityFile` y resolucion de hosts remotos desde el contenedor.
 
 El asistente no modifica `.htaccess` de `dev/` ni `qa/`. Para el entorno local, Docker usa reglas de rewrite en los VirtualHosts y debe mantener `AllowOverride None` en:
 
@@ -450,6 +467,8 @@ docker/apache/redgps.backend.qa.conf
 ```
 
 De esa forma una diferencia de `.htaccess` en los repos de aplicacion no debe romper Docker local ni afectar el comportamiento de la plataforma en los servidores reales.
+
+Si el asistente detecta `IdentityFile ~/.ssh/id_rsa`, `$HOME/.ssh/id_rsa` o rutas relativas dentro de los aliases `dev/qa`, ofrecera normalizarlas a rutas absolutas y creara un respaldo `~/.ssh/config.redgps.bak` antes de escribir.
 
 ## 8. Configurar `/etc/hosts`
 
@@ -642,7 +661,7 @@ El comando usa el alias `qa` de `~/.ssh/config`. `make vpn-qa` calcula automatic
 Ejemplo manual equivalente:
 
 ```bash
-sudo sshuttle --dns \
+sshuttle --dns \
   -r qa \
   -e "ssh -F $HOME/.ssh/config" \
   -x 164.90.145.86:6611 \
@@ -651,6 +670,8 @@ sudo sshuttle --dns \
 ```
 
 Mantén este proceso abierto mientras necesites acceso remoto.
+
+No ejecutes `sudo sshuttle` manualmente ni `sudo make vpn-qa`. `sshuttle` puede pedir contrasena de `sudo` para instalar rutas/firewall locales, pero el proceso SSH debe conservar tu usuario normal para leer `~/.ssh/config` y tus llaves.
 
 El destino `0/0` envia por el tunel casi todo el trafico que no este excluido. Eso puede hacer que el navegador o el sistema se sientan mas lentos mientras `make vpn-qa` esta activo. Si la computadora se vuelve lenta, cierra el proceso del tunel cuando termines de probar QA.
 
@@ -787,7 +808,7 @@ docker exec redgps_qa_web getent hosts sesiones.redgps.com
 docker exec redgps_qa_web getent hosts gateway.redgps.com
 ```
 
-Si no resuelve o no conecta, revisa el alias `qa` de `~/.ssh/config`, el valor `SSH_TUNNEL_EXCLUDE_HOST` en `.env` y que `make vpn-qa` siga ejecutandose.
+Si no resuelve o no conecta, revisa el alias `qa` de `~/.ssh/config`, que `make -n vpn-qa` excluya `164.90.145.86:6611` y que `make vpn-qa` siga ejecutandose.
 
 ### Falla `make redis-config-qa`
 
