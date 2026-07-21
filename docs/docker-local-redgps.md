@@ -329,6 +329,8 @@ SSHUTTLE_LOOPBACK_EXCLUDE=127.0.0.1/32
 
 REDIS_REMOTE_PATH=/home/redgps/redisCache.ini
 REDIS_LOCAL_PATH=docker/php/redisCache.ini
+CACHE_SERVERS_REMOTE_PATH=/var/cache/files/cache_servidores
+CACHE_SERVERS_LOCAL_PATH=docker/var-cache/files/cache_servidores
 ```
 
 No subas `.env`, llaves privadas, certificados privados ni contrasenas reales.
@@ -386,6 +388,7 @@ Instala o valida principalmente:
 - `sshuttle`
 - `openssl`
 - `curl` o `wget`
+- `certutil` cuando el gestor del sistema lo ofrece, para instalar la CA en Chrome/Chromium en Linux
 - certificados CA del sistema cuando aplica
 
 En Linux, `make install-tools` intenta usar el gestor disponible:
@@ -401,16 +404,16 @@ Comandos manuales equivalentes por sistema:
 ```bash
 # Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl wget openssl sshuttle python3
+sudo apt-get install -y ca-certificates curl wget openssl sshuttle python3 libnss3-tools
 
 # Fedora
-sudo dnf install -y ca-certificates curl wget openssl sshuttle python3
+sudo dnf install -y ca-certificates curl wget openssl sshuttle python3 nss-tools
 
 # CentOS/RHEL
-sudo yum install -y ca-certificates curl wget openssl sshuttle python3
+sudo yum install -y ca-certificates curl wget openssl sshuttle python3 nss-tools
 
 # openSUSE
-sudo zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3
+sudo zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3 mozilla-nss-tools
 
 # Arch Linux
 sudo pacman -Sy --needed ca-certificates curl wget openssl sshuttle python
@@ -456,6 +459,7 @@ El asistente revisa:
 - Certificados locales.
 - VirtualHosts Docker.
 - `.htaccess` de las aplicaciones.
+- Cache local de servidores en `docker/var-cache/files/cache_servidores`.
 - Permisos y propietarios de archivos locales.
 - SSH, `sshuttle`, aliases `dev/qa`, rutas absolutas de `IdentityFile` y resolucion de hosts remotos desde el contenedor.
 
@@ -526,7 +530,7 @@ Instala la CA local en el sistema:
 make certs-install
 ```
 
-En Linux usa `/usr/local/share/ca-certificates` y `update-ca-certificates`.
+En Linux usa `/usr/local/share/ca-certificates`, `update-ca-certificates` y, si `certutil` esta disponible, tambien instala la CA en `~/.pki/nssdb` para Chrome/Chromium.
 
 En macOS usa `security add-trusted-cert` contra el System Keychain.
 
@@ -538,7 +542,7 @@ Si el navegador sigue marcando el certificado como no confiable, cierra y vuelve
 ls -la docker/apache/certs/dev.redgps.local.crt docker/apache/certs/dev.redgps.local.key
 ```
 
-## 10. Configuracion Redis remota
+## 10. Configuracion Redis remota y cache de servidores
 
 El archivo real `docker/php/redisCache.ini` no se versiona porque contiene credenciales.
 
@@ -565,6 +569,26 @@ Si no tienes acceso remoto, crea una copia local desde la plantilla y completa l
 ```bash
 cp docker/php/redisCache.ini.example docker/php/redisCache.ini
 ```
+
+La aplicacion tambien necesita archivos JSON en `docker/var-cache/files/cache_servidores/`. Estos archivos contienen inventario operativo de servidores, por eso no se suben al repositorio. Para traerlos desde QA:
+
+```bash
+make cache-servers-qa
+```
+
+El comando usa:
+
+```text
+$(SSHUTTLE_REMOTE):$(CACHE_SERVERS_REMOTE_PATH) -> $(CACHE_SERVERS_LOCAL_PATH)
+```
+
+Por defecto:
+
+```text
+qa:/var/cache/files/cache_servidores -> docker/var-cache/files/cache_servidores
+```
+
+Si faltan estos archivos, la aplicacion puede responder `404` y `make logs-qa` puede mostrar mensajes `NO SE ENCONTRO CACHE`.
 
 No subas `docker/php/redisCache.ini`.
 
@@ -594,10 +618,11 @@ make hosts-install
 make certs
 make certs-install
 make redis-config-qa
+make cache-servers-qa
 make build
 ```
 
-Si no necesitas Redis remoto o no tienes acceso SSH, ejecuta los pasos manualmente y omite `make redis-config-qa`.
+Si no necesitas Redis remoto o no tienes acceso SSH, ejecuta los pasos manualmente y omite `make redis-config-qa` y `make cache-servers-qa`. Sin cache de servidores algunas pantallas de QA pueden devolver `404`.
 
 ## 12. Levantar y apagar contenedores
 
@@ -765,7 +790,14 @@ make certs
 make certs-install
 ```
 
-Cierra y vuelve a abrir el navegador si mantiene cache de certificados. Asegurate tambien de entrar con HTTPS y puerto `8001`, por ejemplo:
+En Linux, si usas Chrome/Chromium y sigue en rojo, valida que `certutil` este instalado y vuelve a ejecutar:
+
+```bash
+make install-tools
+make certs-install-linux
+```
+
+Cierra completamente y vuelve a abrir el navegador si mantiene cache de certificados. Asegurate tambien de entrar con HTTPS y puerto `8001`, por ejemplo:
 
 ```text
 https://qa.redgps.local:8001/
@@ -786,6 +818,36 @@ Despues de actualizar esos archivos, reinicia los contenedores:
 ```bash
 docker compose restart dev_web qa_web
 ```
+
+Si esas lineas siguen apareciendo con fecha vieja en `make logs-qa`, pueden ser logs historicos del contenedor. Limpia los logs locales y reproduce el error actual:
+
+```bash
+make logs-clear-qa
+make logs-qa
+```
+
+### QA responde 404 y faltan caches de servidores
+
+Si el navegador muestra `404 Not Found` y `make logs-qa` muestra mensajes como:
+
+```text
+NO SE ENCONTRO CACHE EN [/var/cache/files/cache_servidores/cache_servers_SLAVE.json]
+ERROR NO SE ENCUENTRA CACHE DE SERVIDORES HISTORY
+```
+
+descarga los caches operativos desde QA:
+
+```bash
+make cache-servers-qa
+```
+
+Luego vuelve a cargar:
+
+```text
+https://qa.redgps.local:8001/
+```
+
+Tambien puedes ejecutar `make setup-wizard`; el asistente detecta caches faltantes o JSON invalidos y puede lanzar `make cache-servers-qa`.
 
 ### Error de DNS o base de datos remota en QA
 

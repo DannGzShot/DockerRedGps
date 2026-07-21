@@ -18,6 +18,9 @@ SSHUTTLE_ROUTES ?= 0/0
 SSHUTTLE_FLAGS ?= --dns
 REDIS_REMOTE_PATH ?= /home/redgps/redisCache.ini
 REDIS_LOCAL_PATH ?= docker/php/redisCache.ini
+CACHE_SERVERS_REMOTE_PATH ?= /var/cache/files/cache_servidores
+CACHE_SERVERS_LOCAL_PATH ?= docker/var-cache/files/cache_servidores
+CACHE_SERVER_FILES ?= cache_servers_.json cache_servers_ALERTA.json cache_servers_API.json cache_servers_GATEWAY.json cache_servers_HISTORY.json cache_servers_HISTORY2.json cache_servers_HISTORY3.json cache_servers_HISTORYWEB.json cache_servers_MASTER.json cache_servers_MONGODB.json cache_servers_MQTT.json cache_servers_OTHER.json cache_servers_PAQUETES.json cache_servers_PROCESSHIST.json cache_servers_PROCESSMQ.json cache_servers_REDISMQ.json cache_servers_REGION_DATACENTER.json cache_servers_SLAVE.json cache_servers_SLAVEDATOGPS.json cache_servers_STREAMING.json cache_servers_WEBGEO.json cache_servers_WEBSOCK.json cache_servers_WEBSRV.json last_update.txt
 PYTHON ?= python3
 
 .PHONY: up build down ps config \
@@ -27,7 +30,7 @@ PYTHON ?= python3
 	logs-qa logs-qa-apache logs-qa-php logs-qa-cli logs-qa-full \
 	logs-gateway logs-master logs-master-apache logs-master-php logs-master-cli logs-master-full \
 	logs-clear logs-clear-dev logs-clear-qa logs-clear-gateway logs-clear-master \
-	certs certs-install certs-install-linux certs-install-mac redis-config-qa setup-qa vpn-qa
+	certs certs-install certs-install-linux certs-install-mac redis-config-qa cache-servers-qa setup-qa vpn-qa
 
 up:
 	docker compose up -d
@@ -70,17 +73,17 @@ install-tools-linux:
 	@set -eu; \
 	if command -v apt-get >/dev/null 2>&1; then \
 		sudo apt-get update; \
-		sudo apt-get install -y ca-certificates curl wget openssl sshuttle python3 || true; \
+		sudo apt-get install -y ca-certificates curl wget openssl sshuttle python3 libnss3-tools || true; \
 	elif command -v dnf >/dev/null 2>&1; then \
-		sudo dnf install -y ca-certificates curl wget openssl sshuttle python3 || true; \
+		sudo dnf install -y ca-certificates curl wget openssl sshuttle python3 nss-tools || true; \
 	elif command -v yum >/dev/null 2>&1; then \
-		sudo yum install -y ca-certificates curl wget openssl sshuttle python3 || true; \
+		sudo yum install -y ca-certificates curl wget openssl sshuttle python3 nss-tools || true; \
 	elif command -v zypper >/dev/null 2>&1; then \
-		sudo zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3 || true; \
+		sudo zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3 mozilla-nss-tools || true; \
 	elif command -v pacman >/dev/null 2>&1; then \
 		sudo pacman -Sy --needed ca-certificates curl wget openssl sshuttle python || true; \
 	elif command -v apk >/dev/null 2>&1; then \
-		sudo apk add --no-cache ca-certificates curl wget openssl sshuttle python3 || true; \
+		sudo apk add --no-cache ca-certificates curl wget openssl sshuttle python3 nss-tools || true; \
 	else \
 		echo "No se detecto un gestor soportado para instalar paquetes base."; \
 	fi; \
@@ -199,6 +202,18 @@ certs-install:
 certs-install-linux:
 	sudo cp docker/apache/certs/redgps-local-dev-ca.crt /usr/local/share/ca-certificates/redgps-local-dev-ca.crt
 	sudo update-ca-certificates
+	@if command -v certutil >/dev/null 2>&1; then \
+		mkdir -p "$$HOME/.pki/nssdb"; \
+		if [ ! -f "$$HOME/.pki/nssdb/cert9.db" ]; then \
+			certutil -N --empty-password -d sql:"$$HOME/.pki/nssdb"; \
+		fi; \
+		certutil -D -d sql:"$$HOME/.pki/nssdb" -n redgps-local-dev-ca >/dev/null 2>&1 || true; \
+		certutil -A -d sql:"$$HOME/.pki/nssdb" -t "C,," -n redgps-local-dev-ca -i docker/apache/certs/redgps-local-dev-ca.crt; \
+		echo "CA local instalada en NSS para navegadores Chromium/Chrome del usuario."; \
+	else \
+		echo "certutil no esta instalado. Chrome/Chromium puede seguir mostrando el certificado en rojo."; \
+		echo "Instala libnss3-tools/nss-tools y vuelve a ejecutar make certs-install-linux."; \
+	fi
 
 certs-install-mac:
 	sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain docker/apache/certs/redgps-local-dev-ca.crt
@@ -206,12 +221,18 @@ certs-install-mac:
 redis-config-qa:
 	scp -F $(SSH_CONFIG) $(SSHUTTLE_REMOTE):$(REDIS_REMOTE_PATH) $(REDIS_LOCAL_PATH)
 
+cache-servers-qa:
+	@mkdir -p "$(CACHE_SERVERS_LOCAL_PATH)"
+	@ssh -F "$(SSH_CONFIG)" "$(SSHUTTLE_REMOTE)" 'cd "$(CACHE_SERVERS_REMOTE_PATH)" && set -- $(CACHE_SERVER_FILES); existing=""; for file do [ -f "$$file" ] && existing="$$existing $$file"; done; if [ -z "$$existing" ]; then echo "No se encontraron archivos cache_servers en $(CACHE_SERVERS_REMOTE_PATH)" >&2; exit 1; fi; tar -cf - $$existing' | tar -C "$(CACHE_SERVERS_LOCAL_PATH)" -xf -
+	@echo "Cache de servidores actualizado en $(CACHE_SERVERS_LOCAL_PATH)."
+
 setup-qa:
 	$(MAKE) install-tools
 	$(MAKE) hosts-install
 	$(MAKE) certs
 	$(MAKE) certs-install
 	$(MAKE) redis-config-qa
+	$(MAKE) cache-servers-qa
 	$(MAKE) build
 
 vpn-qa:

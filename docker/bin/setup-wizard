@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -56,6 +57,32 @@ APP_OPTIONAL_PATHS = [
     "qa/api",
 ]
 
+CACHE_SERVER_FILES = [
+    "cache_servers_.json",
+    "cache_servers_ALERTA.json",
+    "cache_servers_API.json",
+    "cache_servers_GATEWAY.json",
+    "cache_servers_HISTORY.json",
+    "cache_servers_HISTORY2.json",
+    "cache_servers_HISTORY3.json",
+    "cache_servers_HISTORYWEB.json",
+    "cache_servers_MASTER.json",
+    "cache_servers_MONGODB.json",
+    "cache_servers_MQTT.json",
+    "cache_servers_OTHER.json",
+    "cache_servers_PAQUETES.json",
+    "cache_servers_PROCESSHIST.json",
+    "cache_servers_PROCESSMQ.json",
+    "cache_servers_REDISMQ.json",
+    "cache_servers_REGION_DATACENTER.json",
+    "cache_servers_SLAVE.json",
+    "cache_servers_SLAVEDATOGPS.json",
+    "cache_servers_STREAMING.json",
+    "cache_servers_WEBGEO.json",
+    "cache_servers_WEBSOCK.json",
+    "cache_servers_WEBSRV.json",
+]
+
 APP_HTACCESS_FILES = [
     "dev/redgps/public/.htaccess",
     "dev/partners/public/.htaccess",
@@ -95,6 +122,7 @@ LOCAL_PERMISSION_PATHS = [
 ]
 
 APP_PERMISSION_PATHS = [
+    "dataservice",
     "dev/redgps/public/.htaccess",
     "dev/redgps/public/index.php",
     "dev/partners/public/.htaccess",
@@ -453,6 +481,20 @@ class Wizard:
                     self.run_make("certs-install", needs_sudo=True)
                 elif self.args.skip_sudo:
                     self.info("Ejecuta make certs-install cuando puedas usar sudo.")
+            if self.system == "Linux":
+                if self.nss_ca_is_installed():
+                    self.ok("CA local parece instalada en NSS para Chrome/Chromium")
+                elif self.command_exists("certutil"):
+                    self.warn("La CA local no aparece en NSS; Chrome/Chromium puede mostrar el certificado en rojo.")
+                    if not self.args.skip_sudo and self.ask("Instalar CA en sistema y NSS con make certs-install?"):
+                        self.run_make("certs-install", needs_sudo=True)
+                    elif self.args.skip_sudo:
+                        self.info("Ejecuta make certs-install-linux y reinicia el navegador.")
+                else:
+                    self.info(
+                        "certutil no esta instalado; si Chrome/Chromium marca el certificado en rojo, "
+                        "instala libnss3-tools/nss-tools y ejecuta make certs-install-linux."
+                    )
 
     def ca_is_installed(self, ca: Path) -> bool:
         if self.system == "Linux":
@@ -465,6 +507,18 @@ class Wizard:
             )
             return result.returncode == 0
         return False
+
+    def nss_ca_is_installed(self) -> bool:
+        if self.system != "Linux" or not self.command_exists("certutil"):
+            return False
+        nss_db = Path.home() / ".pki" / "nssdb"
+        if not (nss_db / "cert9.db").exists():
+            return False
+        result = self.run(
+            ["certutil", "-L", "-d", f"sql:{nss_db}", "-n", "redgps-local-dev-ca"],
+            timeout=20,
+        )
+        return result.returncode == 0
 
     def check_vhosts_and_htaccess(self) -> None:
         self.step("Revisando VirtualHosts Docker y .htaccess de aplicaciones")
@@ -611,7 +665,7 @@ class Wizard:
                 else:
                     self.warn(f"No pude leer el alias SSH {alias}. Revisa ~/.ssh/config.")
 
-        vpn_preview = self.run(["make", "-n", "vpn-qa"], timeout=20)
+        vpn_preview = self.run(["make", "--no-print-directory", "-n", "vpn-qa"], timeout=20)
         if vpn_preview.returncode == 0:
             preview = " ".join(vpn_preview.stdout.strip().split())
             if preview.startswith("sudo sshuttle"):
@@ -653,6 +707,54 @@ class Wizard:
             shutil.copy2(ssh_config, backup)
             self.write_text(ssh_config, fixed_content)
             self.action(f"Normalizado ~/.ssh/config; respaldo creado en {backup}")
+
+    def check_cache_servers(self) -> None:
+        self.step("Revisando cache local de servidores")
+        env_values = self.parse_env()
+        local_value = env_values.get("CACHE_SERVERS_LOCAL_PATH", "docker/var-cache/files/cache_servidores")
+        local_dir = Path(local_value)
+        if not local_dir.is_absolute():
+            local_dir = self.rel(local_value)
+
+        if not local_dir.exists():
+            self.warn(f"Falta carpeta de cache de servidores: {local_dir.relative_to(self.root)}")
+            if self.ask("Crear carpeta de cache de servidores?"):
+                self.ensure_dir(local_dir)
+
+        missing = [name for name in CACHE_SERVER_FILES if not (local_dir / name).exists()]
+        invalid = []
+        for name in CACHE_SERVER_FILES:
+            path = local_dir / name
+            if not path.exists():
+                continue
+            if name == "cache_servers_REGION_DATACENTER.json":
+                if not self.read_text(path).strip():
+                    invalid.append(name)
+                continue
+            try:
+                json.loads(self.read_text(path))
+            except json.JSONDecodeError:
+                invalid.append(name)
+
+        if not missing and not invalid:
+            self.ok("Cache de servidores completo y con JSON valido")
+            return
+
+        if missing:
+            preview = ", ".join(missing[:8])
+            suffix = "" if len(missing) <= 8 else f" y {len(missing) - 8} mas"
+            self.warn(f"Faltan caches de servidores: {preview}{suffix}")
+        if invalid:
+            self.warn("Caches de servidores con JSON invalido: " + ", ".join(invalid))
+
+        self.info("Sin estos archivos la aplicacion puede responder 404 y registrar NO SE ENCONTRO CACHE.")
+        if self.ask("Descargar cache de servidores desde QA con make cache-servers-qa?"):
+            self.run_make("cache-servers-qa")
+            missing_after = [name for name in CACHE_SERVER_FILES if not (local_dir / name).exists()]
+            if missing_after:
+                self.warn("Aun faltan caches despues de descargar: " + ", ".join(missing_after[:8]))
+            else:
+                self.ok("Cache de servidores descargado")
 
     def check_docker_runtime(self) -> None:
         self.step("Revisando Docker Compose y contenedores")
@@ -708,6 +810,11 @@ class Wizard:
             code = result.stdout.strip()
             if code in {"200", "302", "401"}:
                 self.ok(f"Gateway QA responde HTTP {code}")
+            elif code == "404":
+                self.warn(
+                    "Gateway QA responde HTTP 404. Si make logs-qa muestra NO SE ENCONTRO CACHE, "
+                    "ejecuta make cache-servers-qa."
+                )
             elif code:
                 self.warn(f"Gateway QA responde HTTP {code}; revisa make logs-qa.")
             else:
@@ -751,6 +858,7 @@ class Wizard:
         self.check_vhosts_and_htaccess()
         self.check_permissions()
         self.check_ssh_and_vpn()
+        self.check_cache_servers()
         self.check_docker_runtime()
         return self.print_summary()
 
