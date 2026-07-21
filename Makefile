@@ -6,7 +6,15 @@
 export
 
 SSHUTTLE_REMOTE ?= qa
-SSH_TUNNEL_EXCLUDE_HOST ?= $(or $(SSH_TUNNEL_HOST),127.0.0.1)
+SSH_CONFIG ?= $$HOME/.ssh/config
+SSHUTTLE_EXCLUDE_HOST ?= $(shell ssh -F "$(SSH_CONFIG)" -G "$(SSHUTTLE_REMOTE)" 2>/dev/null | awk '$$1 == "hostname" {print $$2; exit}')
+SSHUTTLE_EXCLUDE_PORT ?= $(shell ssh -F "$(SSH_CONFIG)" -G "$(SSHUTTLE_REMOTE)" 2>/dev/null | awk '$$1 == "port" {print $$2; exit}')
+SSH_TUNNEL_EXCLUDE_HOST ?= $(if $(SSHUTTLE_EXCLUDE_HOST),$(SSHUTTLE_EXCLUDE_HOST),$(or $(SSH_TUNNEL_HOST),127.0.0.1))
+SSH_TUNNEL_EXCLUDE_PORT ?= $(if $(SSHUTTLE_EXCLUDE_PORT),$(SSHUTTLE_EXCLUDE_PORT),$(or $(SSH_TUNNEL_PORT),22))
+SSHUTTLE_EXCLUDE_REMOTE ?= $(SSH_TUNNEL_EXCLUDE_HOST):$(SSH_TUNNEL_EXCLUDE_PORT)
+SSHUTTLE_LOOPBACK_EXCLUDE ?= 127.0.0.1/32
+SSHUTTLE_ROUTES ?= 0/0
+SSHUTTLE_FLAGS ?= --dns
 REDIS_REMOTE_PATH ?= /home/redgps/redisCache.ini
 REDIS_LOCAL_PATH ?= docker/php/redisCache.ini
 PYTHON ?= python3
@@ -206,4 +214,4 @@ setup-qa:
 	$(MAKE) build
 
 vpn-qa:
-	sudo sshuttle --dns --disable-ipv6 -r $(SSHUTTLE_REMOTE) -e "ssh -F $$HOME/.ssh/config" -x $(SSH_TUNNEL_EXCLUDE_HOST)/32 -x 127.0.0.0/8 0/0
+	sudo sshuttle $(SSHUTTLE_FLAGS) -r $(SSHUTTLE_REMOTE) -e "ssh -F $(SSH_CONFIG)" -x $(SSHUTTLE_EXCLUDE_REMOTE) -x $(SSHUTTLE_LOOPBACK_EXCLUDE) $(SSHUTTLE_ROUTES)

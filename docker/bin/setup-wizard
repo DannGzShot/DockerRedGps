@@ -337,7 +337,7 @@ class Wizard:
 
         env_values = self.parse_env()
         if env_values:
-            for key in ["SSHUTTLE_REMOTE", "SSH_TUNNEL_HOST", "SSH_TUNNEL_EXCLUDE_HOST"]:
+            for key in ["SSHUTTLE_REMOTE", "SSH_TUNNEL_HOST"]:
                 value = env_values.get(key, "")
                 if not value:
                     self.warn(f"{key} no esta definido en .env")
@@ -345,6 +345,12 @@ class Wizard:
                     self.warn(f"{key} sigue con valor de ejemplo: {value}")
                 else:
                     self.ok(f"{key} definido")
+            for key in ["SSH_TUNNEL_EXCLUDE_HOST", "SSH_TUNNEL_EXCLUDE_PORT"]:
+                value = env_values.get(key, "")
+                if value:
+                    self.ok(f"{key} definido manualmente")
+                else:
+                    self.info(f"{key} no esta definido; make vpn-qa lo calculara desde ~/.ssh/config")
 
         redis_real = self.rel("docker/php/redisCache.ini")
         redis_example = self.rel("docker/php/redisCache.ini.example")
@@ -538,6 +544,13 @@ class Wizard:
             ssh_g = self.run(["ssh", "-F", str(ssh_config), "-G", "qa"], timeout=20)
             if ssh_g.returncode == 0:
                 self.ok("Alias SSH qa se puede leer con ssh -G")
+                ssh_values = parse_ssh_config_output(ssh_g.stdout)
+                host = ssh_values.get("hostname", "")
+                port = ssh_values.get("port", "")
+                if host and port:
+                    self.ok(f"make vpn-qa excluira el endpoint SSH {host}:{port}")
+                else:
+                    self.warn("No pude calcular HostName/Port del alias qa para excluirlo del tunel.")
             else:
                 self.warn("No pude leer el alias SSH qa. Revisa ~/.ssh/config.")
 
@@ -664,6 +677,15 @@ def walk_limited(start: Path, limit: int) -> Iterable[Path]:
 def last_line(text: str) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return lines[-1] if lines else ""
+
+
+def parse_ssh_config_output(text: str) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    for line in text.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            values[parts[0].lower()] = parts[1]
+    return values
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:

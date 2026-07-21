@@ -633,20 +633,26 @@ Cuando el flujo local necesita resolver servicios remotos:
 make vpn-qa
 ```
 
-El comando usa el alias `qa` de `~/.ssh/config` y excluye del tunel la IP publica definida en `SSH_TUNNEL_EXCLUDE_HOST`.
+El comando usa el alias `qa` de `~/.ssh/config`. `make vpn-qa` calcula automaticamente `HostName` y `Port` con `ssh -G qa` para excluir del tunel el endpoint SSH real. Para el QA actual, el alias resuelve a:
+
+```text
+164.90.145.86:6611
+```
 
 Ejemplo manual equivalente:
 
 ```bash
-sudo sshuttle --dns --disable-ipv6 \
+sudo sshuttle --dns \
   -r qa \
   -e "ssh -F $HOME/.ssh/config" \
-  -x <qa-public-ip>/32 \
-  -x 127.0.0.0/8 \
+  -x 164.90.145.86:6611 \
+  -x 127.0.0.1/32 \
   0/0
 ```
 
 Mantén este proceso abierto mientras necesites acceso remoto.
+
+El destino `0/0` envia por el tunel casi todo el trafico que no este excluido. Eso puede hacer que el navegador o el sistema se sientan mas lentos mientras `make vpn-qa` esta activo. Si la computadora se vuelve lenta, cierra el proceso del tunel cuando termines de probar QA.
 
 ## 15. Logs
 
