@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Autor: DannGzShot
+# Fecha de creacion: 16/03/2026
+# Descripcion: Actualiza repos de aplicacion con rebase y autostash para mantenerlos compatibles con Docker local.
+
+set -euo pipefail
+
+environment="${1:-all}"
+mode="${2:-pull}"
+
+required_repos=(redgps partners reportes atomic commons)
+optional_repos=(alertas api)
+
+case "$environment" in
+  all|dev|qa)
+    ;;
+  *)
+    echo "Ambiente invalido: $environment. Usa all, dev o qa." >&2
+    exit 1
+    ;;
+esac
+
+case "$mode" in
+  pull|--status|status)
+    ;;
+  *)
+    echo "Modo invalido: $mode. Usa pull o --status." >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$environment" == "all" ]]; then
+  environments=(dev qa)
+else
+  environments=("$environment")
+fi
+
+failed=0
+
+repo_branch() {
+  git -C "$1" branch --show-current 2>/dev/null || true
+}
+
+repo_upstream() {
+  git -C "$1" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true
+}
+
+update_repo() {
+  local repo_path="$1"
+  local label="$2"
+  local branch upstream
+
+  if [[ ! -d "$repo_path" ]]; then
+    echo "SKIP: $label no existe."
+    return
+  fi
+
+  if ! git -C "$repo_path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "SKIP: $label no es un repo Git."
+    return
+  fi
+
+  branch="$(repo_branch "$repo_path")"
+  upstream="$(repo_upstream "$repo_path")"
+
+  echo ""
+  echo "==> $label"
+  echo "Rama: ${branch:-desconocida}"
+  if [[ -n "$upstream" ]]; then
+    echo "Upstream: $upstream"
+  else
+    echo "Upstream: sin configurar"
+  fi
+
+  git -C "$repo_path" status --short
+
+  if [[ "$mode" == "--status" || "$mode" == "status" ]]; then
+    return
+  fi
+
+  if [[ -z "$branch" ]]; then
+    echo "ERROR: $label no esta en una rama local; no se actualiza." >&2
+    failed=1
+    return
+  fi
+
+  if ! git -C "$repo_path" fetch --prune; then
+    echo "ERROR: no se pudo hacer fetch en $label." >&2
+    failed=1
+    return
+  fi
+
+  if [[ -n "$upstream" ]]; then
+    if ! git -C "$repo_path" pull --rebase --autostash; then
+      echo "ERROR: pull --rebase fallo en $label. Revisa conflictos en $repo_path." >&2
+      failed=1
+      return
+    fi
+  else
+    if ! git -C "$repo_path" pull --rebase --autostash origin "$branch"; then
+      echo "ERROR: pull --rebase origin $branch fallo en $label. Revisa conflictos en $repo_path." >&2
+      failed=1
+      return
+    fi
+  fi
+
+  git -C "$repo_path" status --short
+}
+
+for env_name in "${environments[@]}"; do
+  for repo_name in "${required_repos[@]}"; do
+    update_repo "$env_name/$repo_name" "$env_name/$repo_name"
+  done
+
+  for repo_name in "${optional_repos[@]}"; do
+    if [[ -d "$env_name/$repo_name" ]]; then
+      update_repo "$env_name/$repo_name" "$env_name/$repo_name"
+    fi
+  done
+done
+
+exit "$failed"

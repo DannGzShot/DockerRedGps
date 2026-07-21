@@ -269,6 +269,16 @@ La integracion Docker monta rutas como:
 
 Si una ruta no existe, Docker puede crear una carpeta vacia y la aplicacion no funcionara correctamente. Verifica la estructura antes de levantar.
 
+Para actualizar los repos de aplicacion sin perder cambios locales:
+
+```bash
+make app-repos-status
+make app-repos-pull-qa
+make app-repos-pull-dev
+```
+
+Estos comandos recorren los repos conocidos dentro de `qa/` o `dev/` y ejecutan `git pull --rebase --autostash`. Si hay cambios locales, Git los guarda temporalmente y los restaura despues del pull. Si aparece un conflicto, el comando se detiene y debes resolverlo dentro del repo indicado.
+
 ## Instalacion automatica recomendada
 
 Cuando Docker ya esta instalado, este repo Docker esta copiado en la carpeta global y los repos de aplicacion ya existen en `dev/`, `qa/` y `dataservice/`, usa el asistente:
@@ -448,7 +458,7 @@ make setup-wizard
 
 `make setup-wizard-dry-run` no modifica archivos ni configuraciones del sistema. Usalo primero para ver que detecta.
 
-`make setup-wizard` ejecuta el asistente interactivo. Pregunta antes de crear `.env`, actualizar `/etc/hosts`, generar/instalar certificados, ajustar VirtualHosts Docker o corregir permisos locales.
+`make setup-wizard` ejecuta el asistente interactivo. Pregunta antes de crear `.env`, actualizar `/etc/hosts`, generar/instalar certificados, actualizar repos de aplicacion cuando detecta archivos viejos y corregir permisos locales.
 
 El asistente revisa:
 
@@ -460,10 +470,10 @@ El asistente revisa:
 - VirtualHosts Docker.
 - `.htaccess` de las aplicaciones.
 - Cache local de servidores en `docker/var-cache/files/cache_servidores`.
-- Permisos y propietarios de archivos locales.
+- Permisos y propietarios de archivos locales, incluyendo `dataservice` si quedo como `root`.
 - SSH, `sshuttle`, aliases `dev/qa`, rutas absolutas de `IdentityFile` y resolucion de hosts remotos desde el contenedor.
 
-El asistente no modifica `.htaccess` de `dev/` ni `qa/`. Para el entorno local, Docker usa reglas de rewrite en los VirtualHosts y debe mantener `AllowOverride None` en:
+El asistente no edita `.htaccess` de `dev/` ni `qa/` directamente. Si detecta una version vieja, puede ejecutar `make app-repos-pull-qa` o `make app-repos-pull-dev` para traer el cambio desde Git. Para el entorno local, Docker usa reglas de rewrite en los VirtualHosts y debe mantener `AllowOverride None` en:
 
 ```text
 docker/apache/redgps.backend.dev.conf
@@ -781,6 +791,16 @@ cat /etc/hosts | grep redgps.local
 docker compose ps
 ```
 
+### dataservice pertenece a root
+
+Si `make setup-wizard` muestra `dataservice owner_uid=0`, corrige el propietario:
+
+```bash
+sudo chown -R "$USER:$USER" dataservice
+```
+
+El asistente tambien puede aplicar ese ajuste si lo ejecutas en modo interactivo y aceptas la pregunta.
+
 ### El navegador marca certificado no confiable
 
 Ejecuta:
@@ -816,6 +836,7 @@ el contenedor esta intentando interpretar reglas del `.htaccess` de la aplicacio
 Despues de actualizar esos archivos, reinicia los contenedores:
 
 ```bash
+make app-repos-pull-qa
 docker compose restart dev_web qa_web
 ```
 
@@ -848,6 +869,40 @@ https://qa.redgps.local:8001/
 ```
 
 Tambien puedes ejecutar `make setup-wizard`; el asistente detecta caches faltantes o JSON invalidos y puede lanzar `make cache-servers-qa`.
+
+### Gateway QA responde 500
+
+Si `make setup-wizard` muestra:
+
+```text
+redgps_qa_web no resuelve sesiones.redgps.com
+Gateway QA responde HTTP 500
+```
+
+mantén el tunel abierto en una terminal:
+
+```bash
+make vpn-qa
+```
+
+En otra terminal valida DNS desde el contenedor:
+
+```bash
+docker exec redgps_qa_web getent hosts sesiones.redgps.com
+docker exec redgps_qa_web getent hosts gateway.redgps.com
+```
+
+Si no resuelve, reinicia los contenedores con el tunel activo:
+
+```bash
+docker compose restart qa_web web
+```
+
+Si el error sigue, revisa logs recientes:
+
+```bash
+TAIL=120 timeout 10s make logs-qa
+```
 
 ### Error de DNS o base de datos remota en QA
 

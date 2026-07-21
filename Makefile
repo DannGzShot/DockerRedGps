@@ -26,6 +26,7 @@ PYTHON ?= python3
 .PHONY: up build down ps config \
 	setup-wizard setup-wizard-dry-run doctor-qa \
 	install-tools install-tools-linux install-tools-mac doctor hosts-print hosts-install \
+	app-repos-status app-repos-pull app-repos-pull-dev app-repos-pull-qa \
 	logs-dev logs-dev-apache logs-dev-php logs-dev-cli logs-dev-full \
 	logs-qa logs-qa-apache logs-qa-php logs-qa-cli logs-qa-full \
 	logs-gateway logs-master logs-master-apache logs-master-php logs-master-cli logs-master-full \
@@ -140,6 +141,18 @@ hosts-install:
 		} | sudo tee -a /etc/hosts >/dev/null; \
 		echo "Hosts locales agregados a /etc/hosts."; \
 	fi
+
+app-repos-status:
+	docker/bin/update-app-repos all --status
+
+app-repos-pull:
+	docker/bin/update-app-repos all
+
+app-repos-pull-dev:
+	docker/bin/update-app-repos dev
+
+app-repos-pull-qa:
+	docker/bin/update-app-repos qa
 
 logs-dev logs-dev-full:
 	docker/bin/logs dev full
