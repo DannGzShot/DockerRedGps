@@ -486,15 +486,27 @@ class Wizard:
                     self.ok("CA local parece instalada en NSS para Chrome/Chromium")
                 elif self.command_exists("certutil"):
                     self.warn("La CA local no aparece en NSS; Chrome/Chromium puede mostrar el certificado en rojo.")
-                    if not self.args.skip_sudo and self.ask("Instalar CA en sistema y NSS con make certs-install?"):
-                        self.run_make("certs-install", needs_sudo=True)
+                    if not self.args.skip_sudo and self.ask("Instalar CA en sistema y NSS con make certs-install-linux?"):
+                        self.run_make("certs-install-linux", needs_sudo=True)
                     elif self.args.skip_sudo:
                         self.info("Ejecuta make certs-install-linux y reinicia el navegador.")
                 else:
-                    self.info(
+                    self.warn(
                         "certutil no esta instalado; si Chrome/Chromium marca el certificado en rojo, "
-                        "instala libnss3-tools/nss-tools y ejecuta make certs-install-linux."
+                        "hace falta instalar herramientas NSS."
                     )
+                    if self.args.skip_sudo:
+                        self.info("Ejecuta make install-tools y make certs-install-linux cuando puedas usar sudo.")
+                    elif self.ask("Instalar herramientas con make install-tools?"):
+                        self.run_make("install-tools", needs_sudo=True)
+                        if self.command_exists("certutil"):
+                            if self.ask("Instalar CA en sistema y NSS con make certs-install-linux?"):
+                                self.run_make("certs-install-linux", needs_sudo=True)
+                        else:
+                            self.warn(
+                                "certutil sigue sin estar disponible. Instala libnss3-tools/nss-tools "
+                                "y vuelve a ejecutar make certs-install-linux."
+                            )
 
     def ca_is_installed(self, ca: Path) -> bool:
         if self.system == "Linux":

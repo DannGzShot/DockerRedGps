@@ -810,7 +810,9 @@ make certs
 make certs-install
 ```
 
-En Linux, si usas Chrome/Chromium y sigue en rojo, valida que `certutil` este instalado y vuelve a ejecutar:
+En Linux, si usas Chrome/Chromium y sigue en rojo, ejecuta `make setup-wizard` en modo interactivo. El asistente puede instalar las herramientas NSS con `make install-tools` y despues registrar la CA con `make certs-install-linux`.
+
+Tambien puedes hacerlo manualmente:
 
 ```bash
 make install-tools
