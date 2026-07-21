@@ -101,19 +101,21 @@ docker run --rm hello-world
 
 Para otras distribuciones Linux, usa la guia oficial de Docker Engine para tu distribucion.
 
-### macOS con Homebrew
+### macOS con Homebrew y Colima
 
 ```bash
-brew install --cask docker
-open -a Docker
+brew install docker docker-compose colima
+colima start --cpu 4 --memory 6
 ```
 
-Despues de abrir la aplicacion de Docker y esperar a que termine de iniciar, valida:
+Valida:
 
 ```bash
 docker version
 docker compose version
 ```
+
+Si tu equipo ya usa otra instalacion de Docker compatible con `docker compose`, solo asegurate de que Docker este iniciado antes de continuar.
 
 ## 3. Clonar o instalar el repositorio Docker
 
@@ -265,6 +267,34 @@ La integracion Docker monta rutas como:
 
 Si una ruta no existe, Docker puede crear una carpeta vacia y la aplicacion no funcionara correctamente. Verifica la estructura antes de levantar.
 
+## Instalacion automatica recomendada
+
+Cuando Docker ya esta instalado, este repo Docker esta copiado en la carpeta global y los repos de aplicacion ya existen en `dev/`, `qa/` y `dataservice/`, usa el asistente:
+
+```bash
+make setup-wizard-dry-run
+make setup-wizard
+```
+
+Primero ejecuta `make setup-wizard-dry-run`. Ese comando solo revisa y explica lo que detecta; no modifica archivos ni configuraciones del sistema.
+
+Luego ejecuta `make setup-wizard`. El asistente pregunta antes de aplicar cambios como crear `.env`, actualizar `/etc/hosts`, generar o instalar certificados, ajustar VirtualHosts Docker y corregir permisos locales de archivos Docker.
+
+Despues del asistente:
+
+```bash
+make up
+make vpn-qa
+```
+
+Mantén `make vpn-qa` abierto en una terminal mientras uses servicios remotos de QA. En otra terminal abre:
+
+```text
+https://qa.redgps.local:8001/
+```
+
+Si prefieres instalar todo manualmente o necesitas revisar cada paso, continua con las secciones siguientes.
+
 ## 5. Crear archivo `.env`
 
 El archivo `.env` no se sube al repositorio. Crea uno desde la plantilla:
@@ -335,16 +365,91 @@ make install-tools
 
 Instala o valida principalmente:
 
+- `python3`
 - `sshuttle`
 - `openssl`
-- `curl`
+- `curl` o `wget`
 - certificados CA del sistema cuando aplica
+
+En Linux, `make install-tools` intenta usar el gestor disponible:
+
+```text
+apt-get, dnf, yum, zypper, pacman o apk
+```
+
+Si `sshuttle` no queda disponible por el gestor de paquetes y existe `snap`, intenta instalar `sshuttle` con `snap`.
+
+Comandos manuales equivalentes por sistema:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl wget openssl sshuttle python3
+
+# Fedora
+sudo dnf install -y ca-certificates curl wget openssl sshuttle python3
+
+# CentOS/RHEL
+sudo yum install -y ca-certificates curl wget openssl sshuttle python3
+
+# openSUSE
+sudo zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3
+
+# Arch Linux
+sudo pacman -Sy --needed ca-certificates curl wget openssl sshuttle python
+
+# Alpine
+sudo apk add --no-cache ca-certificates curl wget openssl sshuttle python3
+
+# Fallback para sshuttle si tu distro usa snap
+sudo snap install sshuttle
+```
+
+En macOS:
+
+```bash
+brew install python curl wget openssl@3 sshuttle
+```
 
 Tambien puedes validar el entorno local:
 
 ```bash
 make doctor
 ```
+
+## 7.1 Instalador asistido
+
+El repo incluye un instalador/diagnosticador en Python que revisa la configuracion completa y va informando lo que hara antes de aplicar cambios:
+
+```bash
+make setup-wizard-dry-run
+make setup-wizard
+```
+
+`make setup-wizard-dry-run` no modifica archivos ni configuraciones del sistema. Usalo primero para ver que detecta.
+
+`make setup-wizard` ejecuta el asistente interactivo. Pregunta antes de crear `.env`, actualizar `/etc/hosts`, generar/instalar certificados, ajustar VirtualHosts Docker o corregir permisos locales.
+
+El asistente revisa:
+
+- Docker y Docker Compose.
+- Estructura esperada de `dev/`, `qa/` y `dataservice/`.
+- `.env`, `redisCache.ini` y plantillas `.example`.
+- `/etc/hosts`.
+- Certificados locales.
+- VirtualHosts Docker.
+- `.htaccess` de las aplicaciones.
+- Permisos y propietarios de archivos locales.
+- SSH, `sshuttle` y resolucion de hosts remotos desde el contenedor.
+
+El asistente no modifica `.htaccess` de `dev/` ni `qa/`. Para el entorno local, Docker usa reglas de rewrite en los VirtualHosts y debe mantener `AllowOverride None` en:
+
+```text
+docker/apache/redgps.backend.dev.conf
+docker/apache/redgps.backend.qa.conf
+```
+
+De esa forma una diferencia de `.htaccess` en los repos de aplicacion no debe romper Docker local ni afectar el comportamiento de la plataforma en los servidores reales.
 
 ## 8. Configurar `/etc/hosts`
 
@@ -408,6 +513,12 @@ En macOS usa `security add-trusted-cert` contra el System Keychain.
 
 Los archivos generados en `docker/apache/certs/` no se suben al repositorio. La carpeta se conserva con `.gitkeep`.
 
+Si el navegador sigue marcando el certificado como no confiable, cierra y vuelve a abrir el navegador. En algunos casos tambien ayuda abrir una terminal nueva despues de instalar la CA y validar que los archivos existan:
+
+```bash
+ls -la docker/apache/certs/dev.redgps.local.crt docker/apache/certs/dev.redgps.local.key
+```
+
 ## 10. Configuracion Redis remota
 
 El archivo real `docker/php/redisCache.ini` no se versiona porque contiene credenciales.
@@ -451,6 +562,8 @@ Edita `general.cfg` con valores autorizados. No subas `docker/var-cache/config/g
 Cuando ya tienes Docker instalado, repos de aplicacion clonados y acceso SSH configurado:
 
 ```bash
+make setup-wizard-dry-run
+make setup-wizard
 make setup-qa
 ```
 
@@ -625,7 +738,50 @@ make certs
 make certs-install
 ```
 
-Cierra y vuelve a abrir el navegador si mantiene cache de certificados.
+Cierra y vuelve a abrir el navegador si mantiene cache de certificados. Asegurate tambien de entrar con HTTPS y puerto `8001`, por ejemplo:
+
+```text
+https://qa.redgps.local:8001/
+```
+
+### Error de `.htaccess` en Docker
+
+Si `make logs-qa` muestra algo como:
+
+```text
+.htaccess: SetEnvIfNoCaseHeader name regex could not be compiled.
+```
+
+el contenedor esta intentando interpretar reglas del `.htaccess` de la aplicacion. En Docker local las reglas de rewrite viven en los VirtualHosts `docker/apache/redgps.backend.dev.conf` y `docker/apache/redgps.backend.qa.conf`, por lo que esos archivos usan `AllowOverride None` para evitar que una diferencia de `.htaccess` rompa el ambiente local.
+
+Despues de actualizar esos archivos, reinicia los contenedores:
+
+```bash
+docker compose restart dev_web qa_web
+```
+
+### Error de DNS o base de datos remota en QA
+
+Si `make logs-qa` muestra:
+
+```text
+SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo failed
+```
+
+Apache ya esta llegando a la aplicacion, pero PHP no puede resolver o conectar al host remoto de sesiones/base de datos. Valida que el tunel este activo:
+
+```bash
+make vpn-qa
+```
+
+En otra terminal revisa la resolucion desde el contenedor:
+
+```bash
+docker exec redgps_qa_web getent hosts sesiones.redgps.com
+docker exec redgps_qa_web getent hosts gateway.redgps.com
+```
+
+Si no resuelve o no conecta, revisa el alias `qa` de `~/.ssh/config`, el valor `SSH_TUNNEL_EXCLUDE_HOST` en `.env` y que `make vpn-qa` siga ejecutandose.
 
 ### Falla `make redis-config-qa`
 

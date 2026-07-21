@@ -1,0 +1,688 @@
+#!/usr/bin/env python3
+# Autor: DannGzShot
+# Fecha de creacion: 16/03/2026
+# Descripcion: Instalador asistido para revisar y preparar el entorno Docker local REDGPS.
+
+from __future__ import annotations
+
+import argparse
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+
+EXPECTED_HOSTS = [
+    "dev.redgps.local",
+    "dev.reportes.local",
+    "dev.partners.local",
+    "qa.redgps.local",
+    "qa.reportes.local",
+    "qa.partners.local",
+]
+
+APP_REQUIRED_PATHS = [
+    "dataservice",
+    "dev/redgps/public/index.php",
+    "dev/partners/public/index.php",
+    "dev/reportes/public/index.php",
+    "dev/atomic",
+    "dev/commons",
+    "qa/redgps/public/index.php",
+    "qa/partners/public/index.php",
+    "qa/reportes/public/index.php",
+    "qa/atomic",
+    "qa/commons",
+]
+
+APP_HTACCESS_FILES = [
+    "dev/redgps/public/.htaccess",
+    "dev/partners/public/.htaccess",
+    "dev/reportes/public/.htaccess",
+    "qa/redgps/public/.htaccess",
+    "qa/partners/public/.htaccess",
+    "qa/reportes/public/.htaccess",
+]
+
+DOCKER_DIRS = [
+    "docker/apache/certs",
+    "docker/runtime/template_c/dev",
+    "docker/runtime/template_c/qa",
+    "docker/runtime/template_c/gateway",
+    "docker/ssh",
+    "docker/var-cache/config",
+    "docker/var-cache/files/autoloads",
+    "docker/var-cache/files/cache_servidores",
+    "docker/var-cache/files/logs_to_save",
+    "docker/var-cache/languages",
+    "docker/var-cache/logs",
+    "docker/var-cache/metadata",
+    "docker/var-cache/recursosEstaticos",
+]
+
+BACKEND_VHOST_FILES = [
+    "docker/apache/redgps.backend.dev.conf",
+    "docker/apache/redgps.backend.qa.conf",
+]
+
+LOCAL_PERMISSION_PATHS = [
+    ".env",
+    "docker/apache/certs",
+    "docker/php/redisCache.ini",
+    "docker/runtime",
+    "docker/var-cache",
+]
+
+APP_PERMISSION_PATHS = [
+    "dev/redgps/public/.htaccess",
+    "dev/redgps/public/index.php",
+    "dev/partners/public/.htaccess",
+    "dev/partners/public/index.php",
+    "dev/reportes/public/.htaccess",
+    "dev/reportes/public/index.php",
+    "qa/redgps/public/.htaccess",
+    "qa/redgps/public/index.php",
+    "qa/partners/public/.htaccess",
+    "qa/partners/public/index.php",
+    "qa/reportes/public/.htaccess",
+    "qa/reportes/public/index.php",
+]
+
+PLACEHOLDER_VALUES = {
+    "your-ssh-user",
+    "your-ssh-host",
+    "your-redis-host",
+    "your-redis-password",
+    "your_mysql_user",
+    "your_mysql_password",
+}
+
+
+class Wizard:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        self.root = Path(__file__).resolve().parents[2]
+        self.step_number = 0
+        self.actions_taken: List[str] = []
+        self.warnings: List[str] = []
+        self.failures: List[str] = []
+        self.system = platform.system()
+        self.uid = os.getuid() if hasattr(os, "getuid") else None
+        self.gid = os.getgid() if hasattr(os, "getgid") else None
+        os.chdir(self.root)
+
+    def say(self, message: str = "") -> None:
+        print(message, flush=True)
+
+    def step(self, title: str) -> None:
+        self.step_number += 1
+        self.say("")
+        self.say(f"[{self.step_number}] {title}")
+
+    def ok(self, message: str) -> None:
+        self.say(f"  OK: {message}")
+
+    def info(self, message: str) -> None:
+        self.say(f"  INFO: {message}")
+
+    def warn(self, message: str) -> None:
+        self.warnings.append(message)
+        self.say(f"  AVISO: {message}")
+
+    def fail(self, message: str) -> None:
+        self.failures.append(message)
+        self.say(f"  ERROR: {message}")
+
+    def action(self, message: str) -> None:
+        self.actions_taken.append(message)
+        self.say(f"  ACCION: {message}")
+
+    def rel(self, path: str) -> Path:
+        return self.root / path
+
+    def command_exists(self, command: str) -> bool:
+        return shutil.which(command) is not None
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        *,
+        input_text: Optional[str] = None,
+        timeout: int = 60,
+    ) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(
+                list(cmd),
+                input=input_text,
+                cwd=str(self.root),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError:
+            return subprocess.CompletedProcess(list(cmd), 127, "", "command not found")
+        except subprocess.TimeoutExpired as exc:
+            return subprocess.CompletedProcess(list(cmd), 124, exc.stdout or "", exc.stderr or "timeout")
+
+    def ask(self, prompt: str, default: bool = False) -> bool:
+        if self.args.dry_run or self.args.doctor_only:
+            self.info(f"dry-run: {prompt}")
+            return False
+        if self.args.yes:
+            self.info(f"auto-yes: {prompt}")
+            return True
+        if not sys.stdin.isatty():
+            self.warn(f"No hay terminal interactiva. Omite: {prompt}")
+            return False
+        suffix = " [S/n] " if default else " [s/N] "
+        answer = input(prompt + suffix).strip().lower()
+        if not answer:
+            return default
+        return answer in {"s", "si", "y", "yes"}
+
+    def sudo_cmd(self, cmd: Sequence[str]) -> List[str]:
+        if self.uid == 0:
+            return list(cmd)
+        return ["sudo", *cmd]
+
+    def write_text(self, path: Path, content: str) -> None:
+        path.write_text(content, encoding="utf-8")
+
+    def read_text(self, path: Path) -> str:
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    def parse_env(self) -> Dict[str, str]:
+        env_path = self.rel(".env")
+        values: Dict[str, str] = {}
+        if not env_path.exists():
+            return values
+        for line in self.read_text(env_path).splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            values[key.strip()] = value.strip().strip("'\"")
+        return values
+
+    def ensure_dir(self, path: Path) -> None:
+        if path.exists():
+            return
+        if self.args.dry_run or self.args.doctor_only:
+            self.info(f"crearia carpeta {path.relative_to(self.root)}")
+            return
+        path.mkdir(parents=True, exist_ok=True)
+        self.action(f"Carpeta creada: {path.relative_to(self.root)}")
+
+    def run_make(self, target: str, *, needs_sudo: bool = False) -> None:
+        cmd = ["make", target]
+        if needs_sudo and self.args.skip_sudo:
+            self.warn(f"Se requiere sudo para make {target}; omitido por --skip-sudo.")
+            return
+        result = self.run(cmd, timeout=180)
+        if result.returncode == 0:
+            self.action(f"Ejecutado: make {target}")
+        else:
+            self.warn(f"Fallo make {target}: {last_line(result.stderr or result.stdout)}")
+
+    def check_os_and_tools(self) -> None:
+        self.step("Revisando sistema y herramientas")
+        if self.system in {"Linux", "Darwin"}:
+            self.ok(f"Sistema soportado: {self.system}")
+        else:
+            self.fail(f"Sistema no soportado para este instalador: {self.system}")
+
+        for command in ["docker", "ssh", "openssl"]:
+            if self.command_exists(command):
+                self.ok(f"{command} disponible")
+            else:
+                self.warn(f"Falta {command}")
+
+        if self.command_exists("curl") or self.command_exists("wget"):
+            self.ok("curl o wget disponible")
+        else:
+            self.warn("Falta curl o wget")
+
+        missing_aux = [cmd for cmd in ["openssl", "sshuttle"] if not self.command_exists(cmd)]
+        if not (self.command_exists("curl") or self.command_exists("wget")):
+            missing_aux.append("curl-o-wget")
+        if self.command_exists("sshuttle"):
+            self.ok("sshuttle disponible")
+        else:
+            self.warn("Falta sshuttle. Ejecuta make install-tools.")
+
+        if missing_aux and self.ask("Instalar herramientas auxiliares con make install-tools?"):
+            self.run_make("install-tools", needs_sudo=(self.system == "Linux"))
+
+        if not self.command_exists("docker"):
+            self.warn("Docker no esta instalado o no esta en PATH.")
+            self.info("Instala Docker antes de levantar contenedores. La documentacion incluye pasos para Linux y macOS.")
+            return
+
+        info = self.run(["docker", "info"], timeout=20)
+        if info.returncode == 0:
+            self.ok("Docker responde con el usuario actual")
+        else:
+            self.warn("Docker no responde con el usuario actual.")
+            if self.system == "Linux":
+                self.explain_linux_docker_permissions()
+            elif self.system == "Darwin":
+                self.info("En macOS abre Docker y espera a que termine de iniciar.")
+
+        compose = self.run(["docker", "compose", "version"], timeout=20)
+        if compose.returncode == 0:
+            self.ok(compose.stdout.strip())
+        else:
+            self.warn("Docker Compose v2 no esta disponible.")
+
+    def explain_linux_docker_permissions(self) -> None:
+        user = os.environ.get("USER", "")
+        groups = self.run(["id", "-nG"], timeout=10)
+        group_names = set(groups.stdout.strip().split()) if groups.returncode == 0 else set()
+        if "docker" not in group_names:
+            self.warn(f"El usuario {user or '<usuario>'} no pertenece al grupo docker.")
+            if user and self.ask(f"Agregar {user} al grupo docker con sudo?"):
+                result = self.run(self.sudo_cmd(["usermod", "-aG", "docker", user]), timeout=60)
+                if result.returncode == 0:
+                    self.action(f"Usuario agregado al grupo docker: {user}")
+                    self.info("Cierra esta terminal y abre una nueva para que el grupo aplique.")
+                else:
+                    self.warn(f"No se pudo agregar al grupo docker: {last_line(result.stderr)}")
+        else:
+            self.info("El usuario esta en el grupo docker; abre una terminal nueva o reinicia la sesion si Docker sigue pidiendo sudo.")
+        self.info("Evita levantar el proyecto con sudo docker compose; eso puede crear archivos con owner root.")
+
+    def check_project_structure(self) -> None:
+        self.step("Revisando estructura del proyecto")
+        for path in DOCKER_DIRS:
+            target = self.rel(path)
+            if target.exists():
+                self.ok(f"Existe {path}")
+            else:
+                self.warn(f"Falta carpeta Docker local {path}")
+                if self.ask(f"Crear carpeta {path}?"):
+                    self.ensure_dir(target)
+
+        missing: List[str] = []
+        for path in APP_REQUIRED_PATHS:
+            target = self.rel(path)
+            if target.exists():
+                self.ok(f"Ruta de aplicacion encontrada: {path}")
+            else:
+                missing.append(path)
+                self.warn(f"Falta ruta de aplicacion: {path}")
+
+        if missing:
+            self.info("No creare dev/ ni qa/ automaticamente. Esos repos deben clonarse o renombrarse manualmente.")
+        else:
+            self.ok("Estructura base de aplicaciones completa")
+
+    def check_env_files(self) -> None:
+        self.step("Revisando archivos locales y plantillas")
+        env_path = self.rel(".env")
+        env_example = self.rel(".env.example")
+        if env_path.exists():
+            self.ok(".env existe")
+        elif env_example.exists():
+            self.warn("Falta .env")
+            if self.ask("Crear .env desde .env.example?"):
+                shutil.copy2(env_example, env_path)
+                self.action("Creado .env desde .env.example")
+        else:
+            self.fail("Faltan .env y .env.example")
+
+        env_values = self.parse_env()
+        if env_values:
+            for key in ["SSHUTTLE_REMOTE", "SSH_TUNNEL_HOST", "SSH_TUNNEL_EXCLUDE_HOST"]:
+                value = env_values.get(key, "")
+                if not value:
+                    self.warn(f"{key} no esta definido en .env")
+                elif value in PLACEHOLDER_VALUES:
+                    self.warn(f"{key} sigue con valor de ejemplo: {value}")
+                else:
+                    self.ok(f"{key} definido")
+
+        redis_real = self.rel("docker/php/redisCache.ini")
+        redis_example = self.rel("docker/php/redisCache.ini.example")
+        if redis_real.exists():
+            self.ok("docker/php/redisCache.ini existe")
+        elif redis_example.exists():
+            self.warn("Falta docker/php/redisCache.ini")
+            if self.ask("Crear docker/php/redisCache.ini desde la plantilla example?"):
+                shutil.copy2(redis_example, redis_real)
+                self.action("Creado docker/php/redisCache.ini desde .example")
+                self.warn("Edita docker/php/redisCache.ini con valores autorizados antes de usar Redis remoto.")
+        else:
+            self.warn("Falta docker/php/redisCache.ini.example")
+
+        general_real = self.rel("docker/var-cache/config/general.cfg")
+        general_example = self.rel("docker/var-cache/config/general.cfg.example")
+        if general_real.exists():
+            self.ok("docker/var-cache/config/general.cfg existe")
+        elif general_example.exists():
+            self.info("general.cfg real no existe; se puede crear si tu entorno lo requiere.")
+
+    def check_hosts(self) -> None:
+        self.step("Revisando /etc/hosts")
+        hosts_path = Path("/etc/hosts")
+        try:
+            content = hosts_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            self.warn(f"No se pudo leer /etc/hosts: {exc}")
+            return
+
+        missing = [host for host in EXPECTED_HOSTS if host not in content]
+        if not missing:
+            self.ok("Hosts locales ya estan presentes")
+            return
+
+        self.warn("Faltan hosts locales: " + ", ".join(missing))
+        block = "\n# REDGPS Docker local\n" + "\n".join(f"127.0.0.1 {host}" for host in missing) + "\n"
+        if self.args.skip_sudo:
+            self.warn("No se modificara /etc/hosts por --skip-sudo.")
+            self.info(block.strip())
+            return
+        if self.ask("Agregar hosts faltantes a /etc/hosts con sudo?"):
+            result = self.run(self.sudo_cmd(["tee", "-a", "/etc/hosts"]), input_text=block, timeout=30)
+            if result.returncode == 0:
+                self.action("Hosts locales agregados a /etc/hosts")
+            else:
+                self.warn(f"No se pudo actualizar /etc/hosts: {last_line(result.stderr)}")
+
+    def check_certs(self) -> None:
+        self.step("Revisando certificados HTTPS locales")
+        cert = self.rel("docker/apache/certs/dev.redgps.local.crt")
+        key = self.rel("docker/apache/certs/dev.redgps.local.key")
+        ca = self.rel("docker/apache/certs/redgps-local-dev-ca.crt")
+
+        if cert.exists() and key.exists() and ca.exists():
+            self.ok("Certificados locales existen")
+        else:
+            self.warn("Faltan certificados locales")
+            if self.ask("Generar certificados con make certs?"):
+                self.run_make("certs")
+
+        if ca.exists():
+            if self.ca_is_installed(ca):
+                self.ok("CA local parece instalada en el sistema")
+            else:
+                self.warn("La CA local no parece instalada o no pude confirmarlo")
+                if not self.args.skip_sudo and self.ask("Instalar CA local con make certs-install?"):
+                    self.run_make("certs-install", needs_sudo=True)
+                elif self.args.skip_sudo:
+                    self.info("Ejecuta make certs-install cuando puedas usar sudo.")
+
+    def ca_is_installed(self, ca: Path) -> bool:
+        if self.system == "Linux":
+            installed = Path("/usr/local/share/ca-certificates/redgps-local-dev-ca.crt")
+            return installed.exists()
+        if self.system == "Darwin" and self.command_exists("security"):
+            result = self.run(
+                ["security", "find-certificate", "-c", "redgps-local-dev-ca", "/Library/Keychains/System.keychain"],
+                timeout=20,
+            )
+            return result.returncode == 0
+        return False
+
+    def check_vhosts_and_htaccess(self) -> None:
+        self.step("Revisando VirtualHosts Docker y .htaccess de aplicaciones")
+        for path in BACKEND_VHOST_FILES:
+            target = self.rel(path)
+            if not target.exists():
+                self.fail(f"Falta {path}")
+                continue
+            content = self.read_text(target)
+            if "AllowOverride All" in content:
+                self.warn(f"{path} permite .htaccess de aplicacion en Docker local")
+                if self.ask(f"Cambiar AllowOverride All a AllowOverride None en {path}?"):
+                    self.write_text(target, content.replace("AllowOverride All", "AllowOverride None"))
+                    self.action(f"Actualizado {path} para ignorar .htaccess en Docker local")
+            elif "AllowOverride None" in content:
+                self.ok(f"{path} ignora .htaccess en Docker local")
+            else:
+                self.warn(f"{path} no contiene AllowOverride explicito")
+
+        for path in APP_HTACCESS_FILES:
+            target = self.rel(path)
+            if not target.exists():
+                self.warn(f"No existe {path}")
+                continue
+            content = self.read_text(target)
+            if "RewriteEngine" not in content:
+                self.warn(f"{path} no contiene RewriteEngine")
+            if "SetEnvIfNoCase ^(" in content or "Accept-EncodXng" in content:
+                self.warn(
+                    f"{path} contiene una regla SetEnvIfNoCase que puede fallar en Apache 2.4. "
+                    "Docker local debe quedar protegido con AllowOverride None."
+                )
+            else:
+                self.ok(f"{path} no contiene la regla SetEnvIfNoCase problematica")
+
+        self.info("No se modifican .htaccess de dev/qa. Solo se diagnostican para evitar tocar la plataforma.")
+
+    def check_permissions(self) -> None:
+        self.step("Revisando propietarios y permisos")
+        if self.uid is None or self.gid is None:
+            self.warn("No se puede revisar UID/GID en este sistema.")
+            return
+
+        local_bad = self.find_non_owner(LOCAL_PERMISSION_PATHS, recursive=True, limit=30)
+        app_bad = self.find_non_owner(APP_PERMISSION_PATHS, recursive=False, limit=30)
+
+        if not local_bad:
+            self.ok("Archivos locales Docker revisados tienen propietario esperado")
+        else:
+            self.warn("Hay archivos locales Docker que no pertenecen al usuario actual:")
+            for item in local_bad:
+                self.say(f"    {item}")
+            if self.args.skip_sudo:
+                self.info("Omitido ajuste de permisos por --skip-sudo.")
+            elif self.ask("Ajustar propietario en rutas locales Docker con sudo chown?"):
+                self.chown_local_paths()
+
+        if app_bad:
+            self.warn("Hay archivos criticos de aplicacion que no pertenecen al usuario actual:")
+            for item in app_bad:
+                self.say(f"    {item}")
+            self.info("No ajusto permisos dentro de dev/qa automaticamente. Revisalo con el responsable del repo.")
+        else:
+            self.ok("Archivos criticos de aplicacion revisados tienen propietario esperado")
+
+    def find_non_owner(self, paths: Iterable[str], *, recursive: bool, limit: int) -> List[str]:
+        bad: List[str] = []
+        for rel_path in paths:
+            start = self.rel(rel_path)
+            if not start.exists():
+                continue
+            candidates: Iterable[Path]
+            if recursive and start.is_dir():
+                candidates = walk_limited(start, limit * 3)
+            else:
+                candidates = [start]
+            for path in candidates:
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if stat.st_uid != self.uid:
+                    bad.append(f"{path.relative_to(self.root)} owner_uid={stat.st_uid}")
+                    if len(bad) >= limit:
+                        bad.append("... mas archivos omitidos")
+                        return bad
+        return bad
+
+    def chown_local_paths(self) -> None:
+        existing = [str(self.rel(path)) for path in LOCAL_PERMISSION_PATHS if self.rel(path).exists()]
+        if not existing:
+            return
+        assert self.uid is not None and self.gid is not None
+        result = self.run(self.sudo_cmd(["chown", "-R", f"{self.uid}:{self.gid}", *existing]), timeout=180)
+        if result.returncode == 0:
+            self.action("Permisos ajustados en rutas locales Docker")
+        else:
+            self.warn(f"No se pudieron ajustar permisos: {last_line(result.stderr)}")
+
+    def check_ssh_and_vpn(self) -> None:
+        self.step("Revisando SSH y tunel QA")
+        ssh_config = Path.home() / ".ssh" / "config"
+        if ssh_config.exists():
+            self.ok("~/.ssh/config existe")
+        else:
+            self.warn("Falta ~/.ssh/config")
+
+        if self.command_exists("ssh"):
+            ssh_g = self.run(["ssh", "-F", str(ssh_config), "-G", "qa"], timeout=20)
+            if ssh_g.returncode == 0:
+                self.ok("Alias SSH qa se puede leer con ssh -G")
+            else:
+                self.warn("No pude leer el alias SSH qa. Revisa ~/.ssh/config.")
+
+        if self.command_exists("sshuttle"):
+            self.ok("sshuttle disponible para make vpn-qa")
+        else:
+            self.warn("sshuttle no esta instalado")
+
+        self.info("make vpn-qa debe quedarse abierto mientras uses servicios remotos de QA.")
+
+    def check_docker_runtime(self) -> None:
+        self.step("Revisando Docker Compose y contenedores")
+        if not self.command_exists("docker"):
+            self.warn("Omito revision de contenedores porque Docker no esta disponible.")
+            return
+
+        config = self.run(["docker", "compose", "config", "--quiet"], timeout=60)
+        if config.returncode == 0:
+            self.ok("docker compose config --quiet correcto")
+        else:
+            self.warn(f"docker compose config fallo: {last_line(config.stderr or config.stdout)}")
+
+        ps = self.run(["docker", "compose", "ps"], timeout=30)
+        if ps.returncode == 0:
+            self.info("Estado actual de contenedores:")
+            for line in ps.stdout.strip().splitlines()[:12]:
+                self.say(f"    {line}")
+        else:
+            self.warn(f"No pude ejecutar docker compose ps: {last_line(ps.stderr or ps.stdout)}")
+            return
+
+        for service in ["qa_web", "dev_web"]:
+            result = self.run(["docker", "compose", "exec", "-T", service, "apache2ctl", "-t"], timeout=30)
+            if result.returncode == 0:
+                self.ok(f"Apache syntax OK en {service}")
+            else:
+                msg = last_line(result.stderr or result.stdout)
+                self.warn(f"No pude validar Apache en {service}: {msg}")
+
+        qa_dns = self.run(["docker", "exec", "redgps_qa_web", "getent", "hosts", "sesiones.redgps.com"], timeout=20)
+        if qa_dns.returncode == 0 and qa_dns.stdout.strip():
+            self.ok("redgps_qa_web resuelve sesiones.redgps.com")
+        else:
+            self.warn("redgps_qa_web no resuelve sesiones.redgps.com. Revisa make vpn-qa.")
+
+        if self.command_exists("curl"):
+            result = self.run(
+                [
+                    "curl",
+                    "-s",
+                    "-k",
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{http_code}",
+                    "-H",
+                    "Host: qa.redgps.local",
+                    "https://127.0.0.1:8001/",
+                ],
+                timeout=30,
+            )
+            code = result.stdout.strip()
+            if code in {"200", "302", "401"}:
+                self.ok(f"Gateway QA responde HTTP {code}")
+            elif code:
+                self.warn(f"Gateway QA responde HTTP {code}; revisa make logs-qa.")
+            else:
+                self.warn("No pude probar https://qa.redgps.local:8001/")
+
+    def print_summary(self) -> int:
+        self.step("Resumen")
+        if self.actions_taken:
+            self.say("Acciones realizadas:")
+            for action in self.actions_taken:
+                self.say(f"  - {action}")
+        else:
+            self.say("No se aplicaron cambios.")
+
+        if self.warnings:
+            self.say("")
+            self.say("Avisos pendientes:")
+            for warning in self.warnings:
+                self.say(f"  - {warning}")
+
+        if self.failures:
+            self.say("")
+            self.say("Errores:")
+            for failure in self.failures:
+                self.say(f"  - {failure}")
+            return 1 if self.args.strict else 0
+
+        return 1 if (self.args.strict and self.warnings) else 0
+
+    def run_all(self) -> int:
+        self.say("REDGPS Docker setup wizard")
+        self.say(f"Raiz del proyecto: {self.root}")
+        if self.args.dry_run or self.args.doctor_only:
+            self.say("Modo revision: no se modificaran archivos ni configuraciones del sistema.")
+
+        self.check_os_and_tools()
+        self.check_project_structure()
+        self.check_env_files()
+        self.check_hosts()
+        self.check_certs()
+        self.check_vhosts_and_htaccess()
+        self.check_permissions()
+        self.check_ssh_and_vpn()
+        self.check_docker_runtime()
+        return self.print_summary()
+
+
+def walk_limited(start: Path, limit: int) -> Iterable[Path]:
+    yielded = 0
+    for root, dirs, files in os.walk(start):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "vendor"}]
+        root_path = Path(root)
+        for name in dirs + files:
+            yield root_path / name
+            yielded += 1
+            if yielded >= limit:
+                return
+
+
+def last_line(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Instalador asistido para el entorno Docker local REDGPS.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Muestra lo que haria sin aplicar cambios.")
+    parser.add_argument("--doctor-only", action="store_true", help="Solo diagnostica; equivalente practico a no modificar.")
+    parser.add_argument("--yes", action="store_true", help="Acepta automaticamente reparaciones no destructivas.")
+    parser.add_argument("--skip-sudo", action="store_true", help="No ejecuta acciones que requieran sudo.")
+    parser.add_argument("--strict", action="store_true", help="Devuelve codigo 1 si quedan avisos o errores.")
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
+    wizard = Wizard(args)
+    return wizard.run_all()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

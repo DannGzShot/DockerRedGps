@@ -9,8 +9,10 @@ SSHUTTLE_REMOTE ?= qa
 SSH_TUNNEL_EXCLUDE_HOST ?= $(or $(SSH_TUNNEL_HOST),127.0.0.1)
 REDIS_REMOTE_PATH ?= /home/redgps/redisCache.ini
 REDIS_LOCAL_PATH ?= docker/php/redisCache.ini
+PYTHON ?= python3
 
 .PHONY: up build down ps config \
+	setup-wizard setup-wizard-dry-run doctor-qa \
 	install-tools install-tools-linux install-tools-mac doctor hosts-print hosts-install \
 	logs-dev logs-dev-apache logs-dev-php logs-dev-cli logs-dev-full \
 	logs-qa logs-qa-apache logs-qa-php logs-qa-cli logs-qa-full \
@@ -33,6 +35,18 @@ ps:
 config:
 	docker compose config
 
+setup-wizard:
+	@command -v $(PYTHON) >/dev/null 2>&1 || { echo "Falta python3. Instala python3 o ejecuta make install-tools."; exit 1; }
+	$(PYTHON) docker/bin/setup-wizard
+
+setup-wizard-dry-run:
+	@command -v $(PYTHON) >/dev/null 2>&1 || { echo "Falta python3. Instala python3 o ejecuta make install-tools."; exit 1; }
+	$(PYTHON) docker/bin/setup-wizard --dry-run
+
+doctor-qa:
+	@command -v $(PYTHON) >/dev/null 2>&1 || { echo "Falta python3. Instala python3 o ejecuta make install-tools."; exit 1; }
+	$(PYTHON) docker/bin/setup-wizard --doctor-only
+
 install-tools:
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		$(MAKE) install-tools-mac; \
@@ -44,16 +58,37 @@ install-tools:
 	fi
 
 install-tools-linux:
-	@if command -v apt-get >/dev/null 2>&1; then \
-		sudo apt-get update && sudo apt-get install -y ca-certificates curl openssl sshuttle; \
+	@set -eu; \
+	if command -v apt-get >/dev/null 2>&1; then \
+		sudo apt-get update; \
+		sudo apt-get install -y ca-certificates curl wget openssl sshuttle python3 || true; \
 	elif command -v dnf >/dev/null 2>&1; then \
-		sudo dnf install -y ca-certificates curl openssl sshuttle; \
+		sudo dnf install -y ca-certificates curl wget openssl sshuttle python3 || true; \
 	elif command -v yum >/dev/null 2>&1; then \
-		sudo yum install -y ca-certificates curl openssl sshuttle; \
+		sudo yum install -y ca-certificates curl wget openssl sshuttle python3 || true; \
+	elif command -v zypper >/dev/null 2>&1; then \
+		sudo zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3 || true; \
 	elif command -v pacman >/dev/null 2>&1; then \
-		sudo pacman -Sy --needed ca-certificates curl openssl sshuttle; \
+		sudo pacman -Sy --needed ca-certificates curl wget openssl sshuttle python || true; \
+	elif command -v apk >/dev/null 2>&1; then \
+		sudo apk add --no-cache ca-certificates curl wget openssl sshuttle python3 || true; \
 	else \
-		echo "No se detecto apt-get, dnf, yum ni pacman. Instala ca-certificates, curl, openssl y sshuttle manualmente."; \
+		echo "No se detecto un gestor soportado para instalar paquetes base."; \
+	fi; \
+	if ! command -v sshuttle >/dev/null 2>&1 && command -v snap >/dev/null 2>&1; then \
+		echo "Intentando instalar sshuttle con snap..."; \
+		sudo snap install sshuttle || sudo snap install sshuttle --classic || true; \
+	fi; \
+	missing=""; \
+	for tool in python3 openssl sshuttle; do \
+		command -v "$$tool" >/dev/null 2>&1 || missing="$$missing $$tool"; \
+	done; \
+	if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then \
+		missing="$$missing curl-o-wget"; \
+	fi; \
+	if [ -n "$$missing" ]; then \
+		echo "Faltan herramientas despues de instalar:$$missing"; \
+		echo "Instalalas manualmente o revisa permisos/repositorios del gestor de paquetes."; \
 		exit 1; \
 	fi
 
@@ -62,13 +97,15 @@ install-tools-mac:
 		echo "Homebrew no esta instalado. Instala Homebrew desde https://brew.sh/ y vuelve a ejecutar make install-tools."; \
 		exit 1; \
 	fi
-	brew install openssl@3 sshuttle
+	brew install python curl wget openssl@3 sshuttle
 
 doctor:
 	@command -v docker >/dev/null 2>&1 || { echo "Falta docker."; exit 1; }
 	@docker compose version >/dev/null 2>&1 || { echo "Falta Docker Compose v2."; exit 1; }
+	@command -v $(PYTHON) >/dev/null 2>&1 || { echo "Falta python3. Ejecuta make install-tools."; exit 1; }
 	@command -v sshuttle >/dev/null 2>&1 || { echo "Falta sshuttle. Ejecuta make install-tools."; exit 1; }
 	@command -v openssl >/dev/null 2>&1 || { echo "Falta openssl. Ejecuta make install-tools."; exit 1; }
+	@(command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1) || { echo "Falta curl o wget. Ejecuta make install-tools."; exit 1; }
 	@echo "Herramientas basicas disponibles."
 
 hosts-print:
