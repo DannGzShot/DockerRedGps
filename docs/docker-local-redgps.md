@@ -904,6 +904,28 @@ docker compose restart qa_web web
 make setup-wizard
 ```
 
+La regeneracion se ejecuta como un proceso PHP CLI con limite de `256M`; no modifica el `memory_limit=128M` usado por Apache. El generador de Atomic recorre `/home/redgps/commons/libs` y llama `token_get_all()` sobre cada PHP. Los arboles Composer `vendor` incluyen miles de archivos y fuentes TCPDF generadas de aproximadamente 1.6 MB, que pueden agotar los `128M` aunque el archivo individual sea pequeno. El target excluye esos `vendor`, conserva las librerias propias y aplica el limite mayor solamente al comando de mantenimiento como margen acotado para diferencias entre ramas y equipos.
+
+Al terminar, el comando comprueba que la entrada `autentificacion` apunte al controlador real montado:
+
+```text
+/var/www/html/web/redgps/sources/controllers/Autentificacion.php
+```
+
+Esta validacion tambien evita que una copia como `Autentificacion_copy.php` gane por el orden del filesystem, que puede variar entre Linux y macOS. Si el target vuelve a indicar agotamiento por un crecimiento futuro del codigo, se puede probar temporalmente un limite CLI explicito sin cambiar PHP web:
+
+```bash
+make QA_AUTOLOAD_MEMORY_LIMIT=384M cache-autoload-qa
+```
+
+El asistente distingue el agotamiento de memoria de otros errores, no considera reparado un cache invalido y solo muestra `Instalacion QA funcional` cuando la prueba directa:
+
+```bash
+curl -H 'Host: qa.redgps.local' http://127.0.0.1:18082/login
+```
+
+responde `200`, `302` o `401` y ya no contiene el `Page not found / 404` generico de Atomic.
+
 Deja el tunel abierto en otra terminal:
 
 ```bash

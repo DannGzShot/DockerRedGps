@@ -1,0 +1,81 @@
+<?php
+
+const CACHE_FILE = '/var/cache/files/autoloads/autoload_redgps';
+const CONTROLLERS_DIR = '/var/www/html/web/redgps/sources/controllers';
+const ROUTES_FILE = '/var/www/html/web/redgps/sources/routes.php';
+
+function failAutoload($message)
+{
+    fwrite(STDERR, $message . PHP_EOL);
+    exit(1);
+}
+
+require '/home/redgps/commons/libs/debug.php';
+require '/var/www/html/web/atomic/Atomic.php';
+
+$app = Atomic::getInstance('bootstrap.php');
+$manager = $app->getAutoloadManager();
+$vendorDirectories = glob('/home/redgps/commons/libs/*/vendor', GLOB_ONLYDIR);
+foreach ($vendorDirectories ?: array() as $vendorDirectory) {
+    $manager->excludeFolder($vendorDirectory);
+}
+$manager->generate();
+
+$classes = is_file(CACHE_FILE) ? include CACHE_FILE : null;
+if (!is_array($classes)) {
+    failAutoload('Autoload QA invalido: no se genero un arreglo de clases.');
+}
+
+$system = array();
+require ROUTES_FILE;
+$route = isset($system['routes']['/login']) && is_array($system['routes']['/login'])
+    ? $system['routes']['/login']
+    : array();
+$controller = isset($route['content']) ? (string) $route['content'] : '';
+$action = isset($route['action']) ? (string) $route['action'] : '';
+$controllersRoot = realpath(CONTROLLERS_DIR);
+$controllerFile = realpath(CONTROLLERS_DIR . DIRECTORY_SEPARATOR . $controller . '.php');
+
+if (!$controller || !$action || !$controllersRoot || !$controllerFile) {
+    failAutoload('Autoload QA invalido: /login no tiene un controlador y una accion disponibles.');
+}
+if (strpos($controllerFile, $controllersRoot . DIRECTORY_SEPARATOR) !== 0) {
+    failAutoload('Autoload QA invalido: el controlador de /login queda fuera del mount QA.');
+}
+
+$source = file_get_contents($controllerFile);
+if ($source === false || preg_match('/function\s+' . preg_quote($action, '/') . '\s*\(/i', $source) !== 1) {
+    failAutoload('Autoload QA invalido: el controlador de /login no implementa la accion esperada.');
+}
+
+$controllerKey = strtolower($controller);
+$classes[$controllerKey] = $controllerFile;
+$content = "<?php\nreturn " . var_export($classes, true) . ';';
+$temporaryFile = tempnam(dirname(CACHE_FILE), 'autoload_');
+if (!$temporaryFile || file_put_contents($temporaryFile, $content) === false) {
+    failAutoload('No se pudo preparar el autoload QA corregido.');
+}
+$mode = fileperms(CACHE_FILE);
+if ($mode !== false) {
+    chmod($temporaryFile, $mode & 0777);
+}
+if (!rename($temporaryFile, CACHE_FILE)) {
+    @unlink($temporaryFile);
+    failAutoload('No se pudo guardar atomicamente el autoload QA corregido.');
+}
+
+if (function_exists('opcache_invalidate')) {
+    @opcache_invalidate(CACHE_FILE, true);
+}
+clearstatcache(true, CACHE_FILE);
+$validatedClasses = include CACHE_FILE;
+$actualController = isset($validatedClasses[$controllerKey])
+    ? realpath($validatedClasses[$controllerKey])
+    : false;
+if ($actualController !== $controllerFile) {
+    failAutoload('Autoload QA invalido: el controlador de /login no apunta al archivo QA montado.');
+}
+
+echo 'Autoload QA regenerado (' . count($validatedClasses) . ' clases; '
+    . count($vendorDirectories ?: array()) . ' directorios vendor excluidos; pico '
+    . round(memory_get_peak_usage(true) / 1048576) . ' MiB).' . PHP_EOL;

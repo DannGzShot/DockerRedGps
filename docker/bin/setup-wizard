@@ -158,6 +158,7 @@ class Wizard:
         self.actions_taken: List[str] = []
         self.warnings: List[str] = []
         self.failures: List[str] = []
+        self.qa_autoload_repair_offered = False
         self.system = platform.system()
         self.uid = os.getuid() if hasattr(os, "getuid") else None
         self.gid = os.getgid() if hasattr(os, "getgid") else None
@@ -292,7 +293,14 @@ class Wizard:
                 self.emit_output_tail(result.stdout, result.stderr, limit=18)
             return True
         else:
-            self.warn(f"Fallo make {target}: {last_line(result.stderr or result.stdout)}")
+            output = result.stdout + "\n" + result.stderr
+            memory_error = re.search(r"Allowed memory size of (\d+) bytes exhausted", output)
+            if target == "cache-autoload-qa" and memory_error:
+                limit_mib = int(memory_error.group(1)) // 1048576
+                self.warn(f"La regeneracion del autoload QA agoto su limite CLI de {limit_mib} MiB.")
+                self.info("El cache no se considera reparado. Revisa QA_AUTOLOAD_MEMORY_LIMIT y los vendor excluidos.")
+            else:
+                self.warn(f"Fallo make {target}: {last_line(result.stderr or result.stdout)}")
             self.emit_output_tail(result.stdout, result.stderr, limit=18)
             if target == "install-tools":
                 self.info("Ejecuta make install-tools directamente en otra terminal y vuelve a iniciar el asistente.")
@@ -981,56 +989,37 @@ class Wizard:
         login_route_ready = self.check_qa_login_route()
 
         if self.command_exists("curl"):
-            backend = self.run(
-                [
-                    "curl",
-                    "-s",
-                    "-S",
-                    "--max-time",
-                    "20",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{http_code} %{time_total} %{size_download}",
-                    "-H",
-                    "Host: qa.redgps.local",
-                    "http://127.0.0.1:18082/login",
-                ],
-                timeout=30,
-            )
-            backend_parts = backend.stdout.strip().split()
-            backend_code = backend_parts[0] if backend_parts else ""
+            backend = self.probe_qa_login()
+            backend_code = str(backend.get("code", ""))
             if backend_code:
-                detail = " ".join(backend_parts[1:])
+                detail = str(backend.get("detail", ""))
                 suffix = f" ({detail})" if detail else ""
                 self.info(f"Backend QA directo /login responde HTTP {backend_code}{suffix}")
-                if backend_code == "404":
-                    self.inspect_backend_404(login_route_ready)
-                    if self.ask("Regenerar autoload QA, reiniciar qa_web/web y volver a probar /login?"):
+            else:
+                self.warn("No pude probar el backend QA directo en http://127.0.0.1:18082/login.")
+
+            if backend.get("atomic_not_found"):
+                self.inspect_backend_404(login_route_ready, str(backend.get("response", "")))
+                if not self.qa_autoload_repair_offered:
+                    self.qa_autoload_repair_offered = True
+                    if self.ask("Reparar autoload QA, reiniciar qa_web/web y volver a probar /login?"):
                         if self.regenerate_qa_autoload():
-                            backend = self.run(
-                                [
-                                    "curl",
-                                    "-s",
-                                    "-S",
-                                    "--max-time",
-                                    "20",
-                                    "-o",
-                                    "/dev/null",
-                                    "-w",
-                                    "%{http_code} %{time_total} %{size_download}",
-                                    "-H",
-                                    "Host: qa.redgps.local",
-                                    "http://127.0.0.1:18082/login",
-                                ],
-                                timeout=30,
-                            )
-                            backend_parts = backend.stdout.strip().split()
-                            backend_code = backend_parts[0] if backend_parts else ""
-                            if backend_code in {"200", "302", "401"}:
-                                self.ok(f"Backend QA /login responde HTTP {backend_code} despues de regenerar autoload")
-                            elif backend_code:
-                                self.warn(f"Backend QA /login sigue respondiendo HTTP {backend_code} despues de regenerar autoload.")
+                            status = self.qa_login_route_status()
+                            login_route_ready = bool(status and self.qa_login_route_is_ready(status))
+                            backend = self.probe_qa_login()
+                            backend_code = str(backend.get("code", ""))
+                            if backend_code:
+                                self.info(f"Backend QA /login responde HTTP {backend_code} despues de la reparacion")
+
+            if login_route_ready and backend_code in {"200", "302", "401"} and not backend.get("atomic_not_found"):
+                self.ok(f"Instalacion QA funcional: /login responde HTTP {backend_code} sin el 404 generico de Atomic")
+            else:
+                if backend.get("atomic_not_found"):
+                    self.warn("Instalacion QA no funcional: /login conserva el 404 generico de Atomic.")
+                elif backend_code:
+                    self.warn(f"Instalacion QA no confirmada: /login responde HTTP {backend_code}.")
+                else:
+                    self.warn("Instalacion QA no confirmada: no se obtuvo respuesta HTTP de /login.")
 
             result = self.run(
                 [
@@ -1156,6 +1145,38 @@ class Wizard:
         self.info("Mantén make vpn-qa abierto en otra terminal y ejecuta docker compose restart qa_web web.")
         self.report_sshuttle_process()
 
+    def probe_qa_login(self) -> Dict[str, object]:
+        marker = "\n__REDGPS_HTTP__ "
+        result = self.run(
+            [
+                "curl",
+                "-s",
+                "-S",
+                "--retry",
+                "3",
+                "--retry-connrefused",
+                "--retry-delay",
+                "1",
+                "--max-time",
+                "20",
+                "-w",
+                marker + "%{http_code} %{time_total} %{size_download}",
+                "-H",
+                "Host: qa.redgps.local",
+                "http://127.0.0.1:18082/login",
+            ],
+            timeout=35,
+        )
+        response, separator, metrics = result.stdout.rpartition(marker)
+        parts = metrics.strip().split() if separator else []
+        code = parts[0] if parts else ""
+        return {
+            "code": code,
+            "detail": " ".join(parts[1:]),
+            "response": response,
+            "atomic_not_found": code == "404" and is_atomic_not_found(response),
+        }
+
     def qa_login_route_status(self) -> Optional[Dict[str, object]]:
         script = r'''
 $system = array();
@@ -1168,6 +1189,10 @@ $cacheFile = '/var/cache/files/autoloads/autoload_redgps';
 $classes = is_file($cacheFile) ? include $cacheFile : null;
 $controllerFile = is_array($classes) && isset($classes[strtolower($controller)])
     ? $classes[strtolower($controller)] : '';
+$expectedControllerFile = $controller
+    ? realpath('/var/www/html/web/redgps/sources/controllers/' . $controller . '.php') : false;
+$actualControllerFile = is_string($controllerFile) && $controllerFile
+    ? realpath($controllerFile) : false;
 $source = is_string($controllerFile) && is_file($controllerFile)
     ? file_get_contents($controllerFile) : false;
 echo json_encode(array(
@@ -1176,6 +1201,10 @@ echo json_encode(array(
     'action' => $action,
     'cache_exists' => is_array($classes),
     'controller_file_exists' => $source !== false,
+    'controller_file' => $actualControllerFile ?: '',
+    'expected_controller_file' => $expectedControllerFile ?: '',
+    'controller_file_matches' => $expectedControllerFile !== false
+        && $actualControllerFile === $expectedControllerFile,
     'action_exists' => $source !== false
         && preg_match('/function\\s+' . preg_quote($action, '/') . '\\s*\\(/i', $source) === 1,
 ));
@@ -1203,6 +1232,7 @@ echo json_encode(array(
             and status.get("action")
             and status.get("cache_exists")
             and status.get("controller_file_exists")
+            and status.get("controller_file_matches")
             and status.get("action_exists")
         )
 
@@ -1221,11 +1251,19 @@ echo json_encode(array(
         cache_invalid = (
             not bool(status.get("cache_exists"))
             or not bool(status.get("controller_file_exists"))
+            or not bool(status.get("controller_file_matches"))
         )
         if cache_invalid:
-            self.info("La cache de autoload QA no contiene un archivo util para la ruta /login.")
+            if status.get("controller_file") and not status.get("controller_file_matches"):
+                self.info(
+                    "La cache de autoload QA apunta /login a "
+                    f"{status['controller_file']} en vez de {status['expected_controller_file']}."
+                )
+            else:
+                self.info("La cache de autoload QA no contiene un archivo util para la ruta /login.")
+            self.qa_autoload_repair_offered = True
             if self.ask("Regenerar el autoload QA dentro de qa_web y volver a validar /login?"):
-                if self.run_make("cache-autoload-qa"):
+                if self.regenerate_qa_autoload():
                     status = self.qa_login_route_status()
                     if status is not None and self.qa_login_route_is_ready(status):
                         self.ok("Autoload QA regenerado; /login ya tiene controlador y accion disponibles")
@@ -1251,7 +1289,7 @@ echo json_encode(array(
             self.action("Reiniciados qa_web y web despues de regenerar el autoload QA")
             return True
         self.warn(f"Autoload QA regenerado, pero no pude reiniciar qa_web/web: {last_line(result.stderr or result.stdout)}")
-        return True
+        return False
 
     def compose_service_container(self, service: str) -> str:
         result = self.run(["docker", "compose", "ps", "-q", service], timeout=20)
@@ -1288,36 +1326,14 @@ echo json_encode(array(
         self.emit_output_tail(result.stdout, result.stderr, limit=18)
         return False
 
-    def inspect_backend_404(self, login_route_ready: bool) -> None:
-        result = self.run(
-            [
-                "curl",
-                "-s",
-                "-S",
-                "--max-time",
-                "20",
-                "-i",
-                "-H",
-                "Host: qa.redgps.local",
-                "http://127.0.0.1:18082/login",
-            ],
-            timeout=30,
-        )
-        response = (result.stdout or "") + "\n" + (result.stderr or "")
-        first = first_nonempty_line(response)
+    def inspect_backend_404(self, login_route_ready: bool, response: str) -> None:
         snippet = html_to_text_snippet(response, limit=220)
-        if first:
-            self.info(f"Primera linea backend QA: {first}")
         if snippet:
             self.info(f"Fragmento respuesta backend QA: {snippet}")
-        if "Page not found" in response or "Not Found 404" in response or "error404" in response or "pagenotfound" in response:
-            if login_route_ready:
-                self.warn(
-                    "El 404 de /login es generado por PHP aunque su ruta y autoload son validos. "
-                    "Ejecuta make cache-autoload-qa, reinicia qa_web/web y vuelve a probar."
-                )
-            else:
-                self.warn("El 404 de /login parece generado por la aplicacion PHP; revisa los avisos de ruta y autoload QA.")
+        if login_route_ready:
+            self.info("El backend devuelve el 404 generico de Atomic aunque la ruta y el autoload parecen validos.")
+        else:
+            self.info("El backend devuelve el 404 generico de Atomic y el autoload de /login no es valido.")
 
     def host_resolves(self, host: str) -> bool:
         try:
@@ -1469,6 +1485,14 @@ def html_to_text_snippet(text: str, *, limit: int = 220) -> str:
     body = re.sub(r"<[^>]+>", " ", body)
     body = " ".join(body.split())
     return body[:limit]
+
+
+def is_atomic_not_found(response: str) -> bool:
+    normalized = response.lower()
+    return any(
+        marker in normalized
+        for marker in ["page not found", "not found 404", "error404", "pagenotfound"]
+    )
 
 
 def parse_ssh_config_output(text: str) -> Dict[str, str]:

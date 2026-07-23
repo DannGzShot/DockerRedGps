@@ -22,6 +22,7 @@ CACHE_SERVERS_REMOTE_PATH ?= /var/cache/files/cache_servidores
 CACHE_SERVERS_LOCAL_PATH ?= docker/var-cache/files/cache_servidores
 CACHE_SERVER_FILES ?= cache_servers_.json cache_servers_ALERTA.json cache_servers_API.json cache_servers_GATEWAY.json cache_servers_HISTORY.json cache_servers_HISTORY2.json cache_servers_HISTORY3.json cache_servers_HISTORYWEB.json cache_servers_MASTER.json cache_servers_MONGODB.json cache_servers_MQTT.json cache_servers_OTHER.json cache_servers_PAQUETES.json cache_servers_PROCESSHIST.json cache_servers_PROCESSMQ.json cache_servers_REDISMQ.json cache_servers_REGION_DATACENTER.json cache_servers_SLAVE.json cache_servers_SLAVEDATOGPS.json cache_servers_STREAMING.json cache_servers_WEBGEO.json cache_servers_WEBSOCK.json cache_servers_WEBSRV.json last_update.txt
 PYTHON ?= python3
+QA_AUTOLOAD_MEMORY_LIMIT ?= 256M
 
 .PHONY: up build down ps config \
 	setup-wizard setup-wizard-dry-run doctor-qa \
@@ -208,7 +209,7 @@ cache-servers-qa:
 	@echo "Cache de servidores actualizado en $(CACHE_SERVERS_LOCAL_PATH)."
 
 cache-autoload-qa:
-	@docker compose exec -T -w /var/www/html/web/redgps/public qa_web php -r 'require "/home/redgps/commons/libs/debug.php"; require "/var/www/html/web/atomic/Atomic.php"; $$app = Atomic::getInstance("bootstrap.php"); $$app->getAutoloadManager()->generate(); $$classes = include "/var/cache/files/autoloads/autoload_redgps"; echo "Autoload QA regenerado (" . count($$classes) . " clases)." . PHP_EOL;'
+	@docker compose exec -T -w /var/www/html/web/redgps/public qa_web php -d memory_limit="$(QA_AUTOLOAD_MEMORY_LIMIT)" -d auto_prepend_file= /home/git/repositorios/docker/bin/generate-qa-autoload
 
 setup-qa:
 	$(MAKE) install-tools
