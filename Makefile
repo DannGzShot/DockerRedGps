@@ -31,7 +31,7 @@ PYTHON ?= python3
 	logs-qa logs-qa-apache logs-qa-php logs-qa-cli logs-qa-full logs-qa-fatal \
 	logs-gateway logs-master logs-master-apache logs-master-php logs-master-cli logs-master-full \
 	logs-clear logs-clear-dev logs-clear-qa logs-clear-gateway logs-clear-master \
-	certs certs-install certs-install-linux certs-install-mac redis-config-qa cache-servers-qa setup-qa vpn-qa
+	certs certs-install certs-install-linux certs-install-mac redis-config-qa cache-servers-qa cache-autoload-qa setup-qa vpn-qa
 
 up:
 	docker compose up -d
@@ -206,6 +206,9 @@ cache-servers-qa:
 	@mkdir -p "$(CACHE_SERVERS_LOCAL_PATH)"
 	@ssh -F "$(SSH_CONFIG)" "$(SSHUTTLE_REMOTE)" 'cd "$(CACHE_SERVERS_REMOTE_PATH)" && set -- $(CACHE_SERVER_FILES); existing=""; for file do [ -f "$$file" ] && existing="$$existing $$file"; done; if [ -z "$$existing" ]; then echo "No se encontraron archivos cache_servers en $(CACHE_SERVERS_REMOTE_PATH)" >&2; exit 1; fi; tar -cf - $$existing' | tar -C "$(CACHE_SERVERS_LOCAL_PATH)" -xf -
 	@echo "Cache de servidores actualizado en $(CACHE_SERVERS_LOCAL_PATH)."
+
+cache-autoload-qa:
+	@docker compose exec -T -w /var/www/html/web/redgps/public qa_web php -r 'require "/home/redgps/commons/libs/debug.php"; require "/var/www/html/web/atomic/Atomic.php"; $$app = Atomic::getInstance("bootstrap.php"); $$app->getAutoloadManager()->generate(); $$classes = include "/var/cache/files/autoloads/autoload_redgps"; echo "Autoload QA regenerado (" . count($$classes) . " clases)." . PHP_EOL;'
 
 setup-qa:
 	$(MAKE) install-tools

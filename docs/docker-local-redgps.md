@@ -896,6 +896,14 @@ make app-repos-pull-qa
 make cache-servers-qa
 ```
 
+El wizard tambien valida dentro de `qa_web` que `sources/routes.php` defina `/login`, que el controlador indicado exista en `autoload_redgps` y que implemente su accion. Si la cache esta desfasada —o `/login` sigue en 404— ofrece regenerarla, reinicia `qa_web` y `web`, y repite la prueba. Tambien puedes hacerlo manualmente:
+
+```bash
+make cache-autoload-qa
+docker compose restart qa_web web
+make setup-wizard
+```
+
 Deja el tunel abierto en otra terminal:
 
 ```bash
