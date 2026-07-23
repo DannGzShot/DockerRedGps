@@ -5,6 +5,12 @@
 !**/.env.example
 !**/.env.*.example
 
+# Repositorios de aplicacion clonados para el entorno local
+/dataservice/
+/dev/
+/qa/
+/master/
+
 # Configuraciones reales generadas desde servidores
 **/redisCache.ini
 !**/redisCache.ini.example

@@ -28,7 +28,7 @@ PYTHON ?= python3
 	install-tools install-tools-linux install-tools-mac doctor hosts-print hosts-install \
 	app-repos-status app-repos-pull app-repos-pull-dev app-repos-pull-qa \
 	logs-dev logs-dev-apache logs-dev-php logs-dev-cli logs-dev-full \
-	logs-qa logs-qa-apache logs-qa-php logs-qa-cli logs-qa-full \
+	logs-qa logs-qa-apache logs-qa-php logs-qa-cli logs-qa-full logs-qa-fatal \
 	logs-gateway logs-master logs-master-apache logs-master-php logs-master-cli logs-master-full \
 	logs-clear logs-clear-dev logs-clear-qa logs-clear-gateway logs-clear-master \
 	certs certs-install certs-install-linux certs-install-mac redis-config-qa cache-servers-qa setup-qa vpn-qa
@@ -71,46 +71,10 @@ install-tools:
 	fi
 
 install-tools-linux:
-	@set -eu; \
-	if command -v apt-get >/dev/null 2>&1; then \
-		sudo apt-get update; \
-		sudo apt-get install -y ca-certificates curl wget openssl sshuttle python3 libnss3-tools || true; \
-	elif command -v dnf >/dev/null 2>&1; then \
-		sudo dnf install -y ca-certificates curl wget openssl sshuttle python3 nss-tools || true; \
-	elif command -v yum >/dev/null 2>&1; then \
-		sudo yum install -y ca-certificates curl wget openssl sshuttle python3 nss-tools || true; \
-	elif command -v zypper >/dev/null 2>&1; then \
-		sudo zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3 mozilla-nss-tools || true; \
-	elif command -v pacman >/dev/null 2>&1; then \
-		sudo pacman -Sy --needed ca-certificates curl wget openssl sshuttle python || true; \
-	elif command -v apk >/dev/null 2>&1; then \
-		sudo apk add --no-cache ca-certificates curl wget openssl sshuttle python3 nss-tools || true; \
-	else \
-		echo "No se detecto un gestor soportado para instalar paquetes base."; \
-	fi; \
-	if ! command -v sshuttle >/dev/null 2>&1 && command -v snap >/dev/null 2>&1; then \
-		echo "Intentando instalar sshuttle con snap..."; \
-		sudo snap install sshuttle || sudo snap install sshuttle --classic || true; \
-	fi; \
-	missing=""; \
-	for tool in python3 openssl sshuttle; do \
-		command -v "$$tool" >/dev/null 2>&1 || missing="$$missing $$tool"; \
-	done; \
-	if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then \
-		missing="$$missing curl-o-wget"; \
-	fi; \
-	if [ -n "$$missing" ]; then \
-		echo "Faltan herramientas despues de instalar:$$missing"; \
-		echo "Instalalas manualmente o revisa permisos/repositorios del gestor de paquetes."; \
-		exit 1; \
-	fi
+	docker/bin/install-tools Linux
 
 install-tools-mac:
-	@if ! command -v brew >/dev/null 2>&1; then \
-		echo "Homebrew no esta instalado. Instala Homebrew desde https://brew.sh/ y vuelve a ejecutar make install-tools."; \
-		exit 1; \
-	fi
-	brew install python curl wget openssl@3 sshuttle
+	docker/bin/install-tools Darwin
 
 doctor:
 	@command -v docker >/dev/null 2>&1 || { echo "Falta docker."; exit 1; }
@@ -177,6 +141,10 @@ logs-qa-php:
 
 logs-qa-cli:
 	docker/bin/logs qa cli
+
+# Muestra en tiempo real solo fallos PHP que detienen o impiden ejecutar la aplicacion.
+logs-qa-fatal:
+	@docker compose logs -f --tail="$${TAIL:-100}" qa_web | grep --line-buffered -Ei 'PHP (Fatal|Parse|Compile|Startup) error|Fatal error|Parse error|Uncaught (Error|Exception)|Allowed memory size.*exhausted'
 
 logs-gateway:
 	docker/bin/logs gateway full

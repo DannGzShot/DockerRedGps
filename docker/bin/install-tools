@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Autor: DannGzShot
+# Fecha de creacion: 16/03/2026
+# Descripcion: Instala herramientas base para el entorno Docker local en Linux y macOS.
+
+set -uo pipefail
+
+system="${1:-$(uname -s)}"
+base_failed=0
+nss_failed=0
+
+info() {
+  printf '%s\n' "$*"
+}
+
+warn() {
+  printf 'AVISO: %s\n' "$*" >&2
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+privileged() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+run_step() {
+  info "+ $*"
+  "$@"
+  local rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    warn "comando fallo con codigo $rc: $*"
+  fi
+  return "$rc"
+}
+
+install_linux() {
+  if have apt-get; then
+    run_step privileged apt-get update || true
+    run_step privileged apt-get install -y ca-certificates curl wget openssl sshuttle python3 || base_failed=1
+    if ! have certutil; then
+      run_step privileged apt-get install -y libnss3-tools || nss_failed=1
+    fi
+  elif have dnf; then
+    run_step privileged dnf install -y ca-certificates curl wget openssl sshuttle python3 nss-tools || base_failed=1
+  elif have yum; then
+    run_step privileged yum install -y ca-certificates curl wget openssl sshuttle python3 nss-tools || base_failed=1
+  elif have zypper; then
+    run_step privileged zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3 mozilla-nss-tools || base_failed=1
+  elif have pacman; then
+    run_step privileged pacman -Sy --needed ca-certificates curl wget openssl sshuttle python nss || base_failed=1
+  elif have apk; then
+    run_step privileged apk add --no-cache ca-certificates curl wget openssl sshuttle python3 nss-tools || base_failed=1
+  else
+    warn "no se detecto un gestor soportado para instalar paquetes base."
+    base_failed=1
+  fi
+
+  if ! have sshuttle && have snap; then
+    info "Intentando instalar sshuttle con snap..."
+    run_step privileged snap install sshuttle || run_step privileged snap install sshuttle --classic || base_failed=1
+  fi
+}
+
+install_macos() {
+  if ! have brew; then
+    warn "Homebrew no esta instalado. Instala Homebrew desde https://brew.sh/ y vuelve a ejecutar make install-tools."
+    info "La instalacion de Homebrew requiere aprobacion del usuario en una terminal interactiva."
+    base_failed=1
+    return
+  fi
+  run_step brew install python curl wget openssl@3 sshuttle || base_failed=1
+}
+
+case "$system" in
+  Linux)
+    install_linux
+    ;;
+  Darwin)
+    install_macos
+    ;;
+  *)
+    warn "sistema no soportado para instalacion automatica de herramientas: $system"
+    base_failed=1
+    ;;
+esac
+
+missing=""
+for tool in openssl sshuttle; do
+  have "$tool" || missing="$missing $tool"
+done
+
+if ! have python3; then
+  missing="$missing python3"
+fi
+
+if ! have curl && ! have wget; then
+  missing="$missing curl-o-wget"
+fi
+
+if [[ -n "$missing" ]]; then
+  warn "faltan herramientas base despues de instalar:$missing"
+  warn "instalalas manualmente o revisa permisos/repositorios del gestor de paquetes."
+  exit 1
+fi
+
+if [[ "$system" == "Linux" ]] && ! have certutil; then
+  warn "certutil no esta disponible. Para Brave/Chrome/Chromium instala libnss3-tools/nss-tools y ejecuta make certs-install-linux."
+  if [[ "$nss_failed" -ne 0 ]]; then
+    warn "la instalacion automatica de NSS fallo, pero las herramientas base quedaron validadas."
+  fi
+fi
+
+info "Herramientas base disponibles."

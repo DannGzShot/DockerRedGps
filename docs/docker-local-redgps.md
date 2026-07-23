@@ -398,7 +398,7 @@ Instala o valida principalmente:
 - `sshuttle`
 - `openssl`
 - `curl` o `wget`
-- `certutil` cuando el gestor del sistema lo ofrece, para instalar la CA en Chrome/Chromium en Linux
+- `certutil`/NSS cuando el gestor del sistema lo ofrece, para instalar la CA en Chrome/Chromium/Brave en Linux
 - certificados CA del sistema cuando aplica
 
 En Linux, `make install-tools` intenta usar el gestor disponible:
@@ -407,7 +407,9 @@ En Linux, `make install-tools` intenta usar el gestor disponible:
 apt-get, dnf, yum, zypper, pacman o apk
 ```
 
-Si `sshuttle` no queda disponible por el gestor de paquetes y existe `snap`, intenta instalar `sshuttle` con `snap`.
+Si `sshuttle` no queda disponible por el gestor de paquetes y existe `snap`, intenta instalar `sshuttle` con `snap`. Si NSS falla pero las herramientas base ya estan instaladas, `make install-tools` deja un aviso y `make setup-wizard` continua con el diagnostico.
+
+Cuando el asistente instala paquetes en Linux, primero pedira la contrasena de `sudo` en la terminal actual. En macOS usa Homebrew; si no esta instalado, indicara instalarlo desde `https://brew.sh/` en otra terminal y volver a ejecutar el asistente.
 
 Comandos manuales equivalentes por sistema:
 
@@ -426,10 +428,10 @@ sudo yum install -y ca-certificates curl wget openssl sshuttle python3 nss-tools
 sudo zypper --non-interactive install ca-certificates curl wget openssl sshuttle python3 mozilla-nss-tools
 
 # Arch Linux
-sudo pacman -Sy --needed ca-certificates curl wget openssl sshuttle python
+sudo pacman -Sy --needed ca-certificates curl wget openssl sshuttle python nss
 
 # Alpine
-sudo apk add --no-cache ca-certificates curl wget openssl sshuttle python3
+sudo apk add --no-cache ca-certificates curl wget openssl sshuttle python3 nss-tools
 
 # Fallback para sshuttle si tu distro usa snap
 sudo snap install sshuttle
@@ -483,6 +485,8 @@ docker/apache/redgps.backend.qa.conf
 De esa forma una diferencia de `.htaccess` en los repos de aplicacion no debe romper Docker local ni afectar el comportamiento de la plataforma en los servidores reales.
 
 Si el asistente detecta `IdentityFile ~/.ssh/id_rsa`, `$HOME/.ssh/id_rsa` o rutas relativas dentro de los aliases `dev/qa`, ofrecera normalizarlas a rutas absolutas y creara un respaldo `~/.ssh/config.redgps.bak` antes de escribir.
+
+Si `qa` ya apunta al servidor correcto y tiene una llave accesible, pero `dev` tiene host, puerto o llave incorrectos, ofrecera crear o corregir `Host dev` con el usuario y la misma llave de `qa`. Antes de actualizarlo crea el mismo respaldo de `~/.ssh/config`.
 
 ## 8. Configurar `/etc/hosts`
 
@@ -585,6 +589,8 @@ La aplicacion tambien necesita archivos JSON en `docker/var-cache/files/cache_se
 ```bash
 make cache-servers-qa
 ```
+
+Los reportes locales resuelven bajo demanda la ruta de historial de cada dispositivo desde el `slave` de QA. Mantén `make vpn-qa` activo mientras ejecutes reportes; no es necesario descargar `estructura_por_equipo_gps` ni `estructura_por_distribuidor`.
 
 El comando usa:
 
@@ -810,7 +816,7 @@ make certs
 make certs-install
 ```
 
-En Linux, si usas Chrome/Chromium y sigue en rojo, ejecuta `make setup-wizard` en modo interactivo. El asistente puede instalar las herramientas NSS con `make install-tools` y despues registrar la CA con `make certs-install-linux`.
+En Linux, si usas Chrome/Chromium/Brave y sigue en rojo, ejecuta `make setup-wizard` en modo interactivo. El asistente puede instalar las herramientas NSS con `make install-tools` y despues registrar la CA con `make certs-install-linux`.
 
 Tambien puedes hacerlo manualmente:
 
@@ -871,6 +877,39 @@ https://qa.redgps.local:8001/
 ```
 
 Tambien puedes ejecutar `make setup-wizard`; el asistente detecta caches faltantes o JSON invalidos y puede lanzar `make cache-servers-qa`.
+
+### Gateway QA responde 404
+
+Si `make setup-wizard` muestra:
+
+```text
+Backend QA directo responde HTTP 404
+Gateway QA responde HTTP 404
+```
+
+el gateway ya esta llegando al backend. El problema ya no es `/etc/hosts` ni el certificado: Apache esta ejecutando la aplicacion y la aplicacion esta devolviendo 404.
+
+Ejecuta en este orden:
+
+```bash
+make app-repos-pull-qa
+make cache-servers-qa
+```
+
+Deja el tunel abierto en otra terminal:
+
+```bash
+make vpn-qa
+```
+
+Luego reinicia los servicios que dependen del tunel y vuelve a diagnosticar:
+
+```bash
+docker compose restart qa_web web
+make setup-wizard
+```
+
+El wizard revisa dentro de `redgps_qa_web` que existan `index.php`, `sources`, `commons` y el cache montado en `/var/cache/files/cache_servidores`. Tambien imprime un fragmento pequeño de la respuesta del backend y ultimas lineas utiles de logs recientes cuando no detecta un patron conocido.
 
 ### Gateway QA responde 500
 
