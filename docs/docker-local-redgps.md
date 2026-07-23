@@ -911,6 +911,8 @@ make setup-wizard
 
 El wizard revisa dentro de `redgps_qa_web` que existan `index.php`, `sources`, `commons` y el cache montado en `/var/cache/files/cache_servidores`. Si los repositorios existen en el host pero no aparecen dentro del contenedor, muestra la ruta montada real, ofrece recrear `qa_web` y `web` con `--force-recreate`, y vuelve a comprobarlos antes de probar el dominio. Tambien imprime un fragmento pequeño de la respuesta del backend y ultimas lineas utiles de logs recientes cuando no detecta un patron conocido.
 
+La raiz de `dev.redgps.local` y `qa.redgps.local` redirige a `/login`, que es la primera ruta de la aplicacion. El wizard valida `/login` y comprueba tanto DNS como la conexion TCP al servicio remoto de sesiones en el puerto `3306`; si falla, deja `make vpn-qa` abierto en otra terminal y ejecuta `docker compose restart qa_web web`.
+
 Si necesitas hacerlo manualmente, desde la raiz del proyecto ejecuta:
 
 ```bash

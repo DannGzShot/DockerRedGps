@@ -962,19 +962,22 @@ class Wizard:
                 self.info("Omito la prueba HTTP hasta que qa_web tenga index.php y sources montados correctamente.")
                 return
 
-        qa_dns = self.run(["docker", "exec", "redgps_qa_web", "getent", "hosts", "sesiones.redgps.com"], timeout=20)
+        session_host = self.qa_session_host()
+        qa_dns = self.run(["docker", "exec", "redgps_qa_web", "getent", "hosts", session_host], timeout=20)
         if qa_dns.returncode == 0 and qa_dns.stdout.strip():
-            self.ok("redgps_qa_web resuelve sesiones.redgps.com")
+            self.ok(f"redgps_qa_web resuelve {session_host}")
         else:
-            self.warn("redgps_qa_web no resuelve sesiones.redgps.com.")
-            if self.host_resolves("sesiones.redgps.com"):
+            self.warn(f"redgps_qa_web no resuelve {session_host}.")
+            if self.host_resolves(session_host):
                 self.info(
-                    "El host local si resuelve sesiones.redgps.com; si el contenedor no, "
+                    f"El host local si resuelve {session_host}; si el contenedor no, "
                     "reinicia qa_web/web con el tunel activo."
                 )
             else:
-                self.warn("El host local tampoco resuelve sesiones.redgps.com. Mantén make vpn-qa abierto en otra terminal.")
+                self.warn(f"El host local tampoco resuelve {session_host}. Mantén make vpn-qa abierto en otra terminal.")
             self.report_sshuttle_process()
+
+        self.check_qa_session_service(session_host)
 
         if self.command_exists("curl"):
             backend = self.run(
@@ -990,7 +993,7 @@ class Wizard:
                     "%{http_code} %{time_total} %{size_download}",
                     "-H",
                     "Host: qa.redgps.local",
-                    "http://127.0.0.1:18082/",
+                    "http://127.0.0.1:18082/login",
                 ],
                 timeout=30,
             )
@@ -999,7 +1002,7 @@ class Wizard:
             if backend_code:
                 detail = " ".join(backend_parts[1:])
                 suffix = f" ({detail})" if detail else ""
-                self.info(f"Backend QA directo responde HTTP {backend_code}{suffix}")
+                self.info(f"Backend QA directo /login responde HTTP {backend_code}{suffix}")
                 if backend_code == "404":
                     self.inspect_backend_404()
 
@@ -1017,25 +1020,25 @@ class Wizard:
                     "%{http_code} %{time_total} %{size_download}",
                     "-H",
                     "Host: qa.redgps.local",
-                    "https://127.0.0.1:8001/",
+                    "https://127.0.0.1:8001/login",
                 ],
                 timeout=30,
             )
             parts = result.stdout.strip().split()
             code = parts[0] if parts else ""
             if code in {"200", "302", "401"}:
-                self.ok(f"Gateway QA responde HTTP {code}")
+                self.ok(f"Gateway QA /login responde HTTP {code}")
             elif code == "404":
                 if backend_code == "404":
-                    self.warn("Gateway QA responde HTTP 404 porque el backend QA directo tambien devuelve 404.")
+                    self.warn("Gateway QA /login responde HTTP 404 porque el backend QA directo tambien devuelve 404.")
                 else:
-                    self.warn("Gateway QA responde HTTP 404; revisa ruteo del gateway y make logs-qa.")
+                    self.warn("Gateway QA /login responde HTTP 404; revisa ruteo del gateway y make logs-qa.")
                 self.inspect_recent_qa_logs()
             elif code:
-                self.warn(f"Gateway QA responde HTTP {code}; revisa make logs-qa.")
+                self.warn(f"Gateway QA /login responde HTTP {code}; revisa make logs-qa.")
                 self.inspect_recent_qa_logs()
             else:
-                self.warn("No pude probar https://qa.redgps.local:8001/")
+                self.warn("No pude probar https://qa.redgps.local:8001/login")
 
     def check_qa_container_mounts(self) -> bool:
         container = self.compose_service_container("qa_web")
@@ -1101,6 +1104,32 @@ class Wizard:
                 ready = False
         return ready
 
+    def qa_session_host(self) -> str:
+        region_file = self.rel("docker/var-cache/files/cache_servidores/cache_servers_REGION_DATACENTER.json")
+        try:
+            region = self.read_text(region_file).strip().lower()
+        except OSError:
+            region = ""
+        return "sesionese1.service24gps.com" if region == "fra" else "sesiones.redgps.com"
+
+    def check_qa_session_service(self, host: str) -> None:
+        script = (
+            '$socket = @fsockopen($argv[1], 3306, $errno, $error, 5); '
+            'if (!$socket) { fwrite(STDERR, $error . " (" . $errno . ")"); exit(1); } '
+            'fclose($socket);'
+        )
+        result = self.run(
+            ["docker", "compose", "exec", "-T", "qa_web", "php", "-r", script, "--", host],
+            timeout=15,
+        )
+        if result.returncode == 0:
+            self.ok(f"qa_web puede conectar a {host}:3306 para sesiones")
+            return
+        detail = last_line(result.stderr or result.stdout)
+        self.warn(f"qa_web no puede conectar a {host}:3306 para sesiones: {detail or 'sin detalle'}")
+        self.info("Mantén make vpn-qa abierto en otra terminal y ejecuta docker compose restart qa_web web.")
+        self.report_sshuttle_process()
+
     def compose_service_container(self, service: str) -> str:
         result = self.run(["docker", "compose", "ps", "-q", service], timeout=20)
         container = first_nonempty_line(result.stdout) if result.returncode == 0 else ""
@@ -1147,7 +1176,7 @@ class Wizard:
                 "-i",
                 "-H",
                 "Host: qa.redgps.local",
-                "http://127.0.0.1:18082/",
+                "http://127.0.0.1:18082/login",
             ],
             timeout=30,
         )
@@ -1158,8 +1187,8 @@ class Wizard:
             self.info(f"Primera linea backend QA: {first}")
         if snippet:
             self.info(f"Fragmento respuesta backend QA: {snippet}")
-        if "Not Found 404" in response or "error404" in response or "pagenotfound" in response:
-            self.warn("El 404 parece generado por la aplicacion PHP, no por Apache.")
+        if "Page not found" in response or "Not Found 404" in response or "error404" in response or "pagenotfound" in response:
+            self.warn("El 404 de /login parece generado por la aplicacion PHP; actualiza los repos QA y revisa sus rutas.")
 
     def host_resolves(self, host: str) -> bool:
         try:
