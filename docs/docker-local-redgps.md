@@ -909,7 +909,14 @@ docker compose restart qa_web web
 make setup-wizard
 ```
 
-El wizard revisa dentro de `redgps_qa_web` que existan `index.php`, `sources`, `commons` y el cache montado en `/var/cache/files/cache_servidores`. Tambien imprime un fragmento pequeño de la respuesta del backend y ultimas lineas utiles de logs recientes cuando no detecta un patron conocido.
+El wizard revisa dentro de `redgps_qa_web` que existan `index.php`, `sources`, `commons` y el cache montado en `/var/cache/files/cache_servidores`. Si los repositorios existen en el host pero no aparecen dentro del contenedor, muestra la ruta montada real, ofrece recrear `qa_web` y `web` con `--force-recreate`, y vuelve a comprobarlos antes de probar el dominio. Tambien imprime un fragmento pequeño de la respuesta del backend y ultimas lineas utiles de logs recientes cuando no detecta un patron conocido.
+
+Si necesitas hacerlo manualmente, desde la raiz del proyecto ejecuta:
+
+```bash
+docker compose up -d --force-recreate qa_web web
+make setup-wizard
+```
 
 ### Gateway QA responde 500
 

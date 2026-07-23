@@ -952,7 +952,15 @@ class Wizard:
                 msg = last_line(result.stderr or result.stdout)
                 self.warn(f"No pude validar Apache en {service}: {msg}")
 
-        self.check_qa_container_mounts()
+        qa_mounts_ready = self.check_qa_container_mounts()
+        if not qa_mounts_ready:
+            self.warn("QA no tiene los archivos de aplicacion esperados dentro del contenedor; Apache devolvera 404.")
+            if self.ask("Recrear qa_web y web para aplicar los bind mounts actuales?"):
+                if self.recreate_qa_services():
+                    qa_mounts_ready = self.check_qa_container_mounts()
+            if not qa_mounts_ready:
+                self.info("Omito la prueba HTTP hasta que qa_web tenga index.php y sources montados correctamente.")
+                return
 
         qa_dns = self.run(["docker", "exec", "redgps_qa_web", "getent", "hosts", "sesiones.redgps.com"], timeout=20)
         if qa_dns.returncode == 0 and qa_dns.stdout.strip():
@@ -1029,23 +1037,104 @@ class Wizard:
             else:
                 self.warn("No pude probar https://qa.redgps.local:8001/")
 
-    def check_qa_container_mounts(self) -> None:
+    def check_qa_container_mounts(self) -> bool:
+        container = self.compose_service_container("qa_web")
+        if not container:
+            self.warn("No pude identificar el contenedor de qa_web para revisar sus mounts.")
+            return False
+        mount_sources = self.container_mount_sources(container)
         checks = [
-            ("index QA montado", "test -f /var/www/html/web/redgps/public/index.php"),
-            ("sources QA montado", "test -d /var/www/html/web/redgps/sources"),
-            ("commons QA montado", "test -d /home/redgps/commons"),
-            ("cache servidores montado", "test -d /var/cache/files/cache_servidores"),
+            (
+                "index QA montado",
+                self.rel("qa/redgps/public/index.php"),
+                self.rel("qa/redgps"),
+                "/var/www/html/web/redgps",
+                "test -f /var/www/html/web/redgps/public/index.php",
+            ),
+            (
+                "sources QA montado",
+                self.rel("qa/redgps/sources"),
+                self.rel("qa/redgps"),
+                "/var/www/html/web/redgps",
+                "test -d /var/www/html/web/redgps/sources",
+            ),
+            (
+                "commons QA montado",
+                self.rel("qa/commons"),
+                self.rel("qa/commons"),
+                "/home/redgps/commons",
+                "test -d /home/redgps/commons",
+            ),
+            (
+                "cache servidores montado",
+                self.rel("docker/var-cache/files/cache_servidores"),
+                self.rel("docker/var-cache"),
+                "/var/cache",
+                "test -d /var/cache/files/cache_servidores",
+            ),
             (
                 "cache MASTER visible en contenedor",
+                self.rel("docker/var-cache/files/cache_servidores/cache_servers_MASTER.json"),
+                self.rel("docker/var-cache"),
+                "/var/cache",
                 "test -s /var/cache/files/cache_servidores/cache_servers_MASTER.json",
             ),
         ]
-        for label, shell_cmd in checks:
-            result = self.run(["docker", "exec", "redgps_qa_web", "sh", "-lc", shell_cmd], timeout=15)
+        ready = True
+        for label, host_path, expected_mount_source, mount_destination, shell_cmd in checks:
+            if not host_path.exists():
+                self.warn(f"Falta {host_path.relative_to(self.root)} en el host; no se puede montar en qa_web.")
+                ready = False
+                continue
+            result = self.run(["docker", "exec", container, "sh", "-lc", shell_cmd], timeout=15)
             if result.returncode == 0:
                 self.ok(label)
             else:
-                self.warn(f"{label} no fue validado dentro de redgps_qa_web")
+                actual_source = mount_sources.get(mount_destination)
+                if actual_source:
+                    self.warn(
+                        f"{label} no fue validado dentro de qa_web. Mount actual: {actual_source} -> "
+                        f"{mount_destination}; se esperaba {expected_mount_source}."
+                    )
+                else:
+                    self.warn(f"{label} no fue validado dentro de qa_web; falta el mount {mount_destination}.")
+                ready = False
+        return ready
+
+    def compose_service_container(self, service: str) -> str:
+        result = self.run(["docker", "compose", "ps", "-q", service], timeout=20)
+        container = first_nonempty_line(result.stdout) if result.returncode == 0 else ""
+        if container:
+            return container
+        return f"redgps_{service}"
+
+    def container_mount_sources(self, container: str) -> Dict[str, str]:
+        result = self.run(["docker", "inspect", container], timeout=20)
+        if result.returncode != 0:
+            return {}
+        try:
+            details = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {}
+        if not details or not isinstance(details[0], dict):
+            return {}
+        mounts = details[0].get("Mounts", [])
+        if not isinstance(mounts, list):
+            return {}
+        return {
+            mount["Destination"]: mount["Source"]
+            for mount in mounts
+            if isinstance(mount, dict) and mount.get("Destination") and mount.get("Source")
+        }
+
+    def recreate_qa_services(self) -> bool:
+        result = self.run(["docker", "compose", "up", "-d", "--force-recreate", "qa_web", "web"], timeout=180)
+        if result.returncode == 0:
+            self.action("Recreados qa_web y web para actualizar sus bind mounts")
+            return True
+        self.warn(f"No se pudieron recrear qa_web y web: {last_line(result.stderr or result.stdout)}")
+        self.emit_output_tail(result.stdout, result.stderr, limit=18)
+        return False
 
     def inspect_backend_404(self) -> None:
         result = self.run(
