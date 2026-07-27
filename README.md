@@ -14,3 +14,9 @@ make setup-wizard
 Guia completa de instalacion automatica, manual y diagnostico:
 
 - [docs/docker-local-redgps.md](docs/docker-local-redgps.md)
+
+Herramientas Git versionadas y su ayuda rapida:
+
+```bash
+make help
+```

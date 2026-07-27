@@ -279,6 +279,71 @@ make app-repos-pull-dev
 
 Estos comandos recorren los repos conocidos dentro de `qa/` o `dev/` y ejecutan `git pull --rebase --autostash`. Si hay cambios locales, Git los guarda temporalmente y los restaura despues del pull. Si aparece un conflicto, el comando se detiene y debes resolverlo dentro del repo indicado.
 
+## Herramientas Git versionadas
+
+Las operaciones Git personales se versionan en `bin/git-tools.sh` y se ejecutan en el host, nunca dentro de un contenedor. Requieren Bash y Git con soporte para `git switch`; funcionan en Linux y WSL. No cargan aliases de una sesion interactiva ni modifican la configuracion global de Git.
+
+```text
+bin/
+└── git-tools.sh                 Operaciones Git compartidas
+docker/bin/update-app-repos      Adaptador para los repos DEV y QA existentes
+Makefile                         Interfaz de los comandos
+```
+
+Consulta el resumen desde la raiz del repositorio:
+
+```bash
+make help
+```
+
+Comandos disponibles:
+
+```bash
+make commit MSG="[FIX] Corrige validacion"
+make update-repos
+make update-repo REPO=commons
+make create-branch BRANCH=actualizacion-sistema
+make create-branch-repo REPO=commons BRANCH=actualizacion-sistema
+make reset-repo REPO=commons
+```
+
+`commit` ejecuta `fetch --prune`, actualiza la rama con `pull --rebase --autostash` si ya tiene upstream, prepara todos los cambios con `git add -A`, evita commits vacios y publica la rama. El mensaje incluye emoji, etiqueta y fecha/hora. Reconoce, entre otras, las etiquetas `[FIX]`, `[FEAT]`, `[SECURITY]`, `[DOCS]`, `[DB]`, `[INFRA]`, `[CONFIG]`, `[REFACTOR]`, `[TEST]`, `[CI]`, `[WIP]` y `[RELEASE]`.
+
+`update-repos` opera sobre los repositorios hijo de `WORKSPACE`; cada uno debe ser un repositorio Git valido con una rama local y un remoto configurado. `update-repo`, `create-branch-repo` y `reset-repo` seleccionan uno de ellos con `REPO`. La creacion de ramas valida el nombre con `git check-ref-format --branch`, comprueba que no exista local ni remotamente, actualiza la rama base y publica la nueva rama con upstream.
+
+Variables configurables mediante `make` o el entorno:
+
+```bash
+make WORKSPACE=/ruta/de/proyectos REPOS="alertas partners redgps reportes commons atomic api" update-repos
+make WORKSPACE=/ruta/de/proyectos REPO=commons BASE_BRANCH=master REMOTE=origin create-branch-repo BRANCH=actualizacion-sistema
+make GIT_REPO=/ruta/de/un-repo BASE_BRANCH=main create-branch BRANCH=actualizacion-sistema
+```
+
+| Variable | Valor predeterminado | Uso |
+|---|---|---|
+| `WORKSPACE` | raiz de este repositorio | Directorio que contiene los repositorios indicados en `REPOS`. |
+| `GIT_REPO` | raiz de este repositorio | Repositorio para `commit` y `create-branch`. |
+| `REPOS` | `alertas partners redgps reportes commons atomic api` | Lista separada por espacios para `update-repos`. |
+| `REPO` | sin valor | Repositorio hijo elegido por los comandos `*-repo`. |
+| `BASE_BRANCH` | `master` | Rama base para crear una rama nueva. |
+| `REMOTE` | `origin` | Remoto que se consulta y publica. |
+| `CONFIRM` | sin valor | Usa `CONFIRM=1` solo para confirmar de forma explicita un reset no interactivo. |
+
+`make reset-repo REPO=commons` solicita escribir `RESET` antes de ejecutar `git reset --hard` contra la rama remota actual. Descarta cambios locales rastreados, conserva archivos no rastreados y nunca ejecuta `git clean`. En automatizaciones sin terminal debes indicar la confirmacion explicita:
+
+```bash
+make CONFIRM=1 reset-repo REPO=commons
+```
+
+Tambien se conservan los comandos Docker existentes `make app-repos-status`, `make app-repos-pull-dev` y `make app-repos-pull-qa`; ahora reutilizan el mismo script versionado para validar repositorios, remotos y ramas.
+
+Para invocacion directa, `bin/git-tools.sh` mantiene compatibilidad con los nombres previos `gc`, `update_repos`, `update_repo`, `create_branch`, `create_branch_repo` y `reset_repo`:
+
+```bash
+bash /ruta/al/repositorio/bin/git-tools.sh gc "[DOCS] Actualiza la guia"
+bash /ruta/al/repositorio/bin/git-tools.sh update_repo commons
+```
+
 ## Instalacion automatica recomendada
 
 Cuando Docker ya esta instalado, este repo Docker esta copiado en la carpeta global y los repos de aplicacion ya existen en `dev/`, `qa/` y `dataservice/`, usa el asistente:

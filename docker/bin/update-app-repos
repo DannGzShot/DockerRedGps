@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+project_root="$(cd -- "$script_dir/../.." && pwd -P)"
+git_tools="$project_root/bin/git-tools.sh"
 environment="${1:-all}"
 mode="${2:-pull}"
 
@@ -35,86 +38,32 @@ else
   environments=("$environment")
 fi
 
-failed=0
-
-repo_branch() {
-  git -C "$1" branch --show-current 2>/dev/null || true
-}
-
-repo_upstream() {
-  git -C "$1" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true
-}
-
 update_repo() {
   local repo_path="$1"
   local label="$2"
-  local branch upstream
 
   if [[ ! -d "$repo_path" ]]; then
     echo "SKIP: $label no existe."
     return
   fi
 
-  if ! git -C "$repo_path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "SKIP: $label no es un repo Git."
-    return
-  fi
-
-  branch="$(repo_branch "$repo_path")"
-  upstream="$(repo_upstream "$repo_path")"
-
-  echo ""
-  echo "==> $label"
-  echo "Rama: ${branch:-desconocida}"
-  if [[ -n "$upstream" ]]; then
-    echo "Upstream: $upstream"
-  else
-    echo "Upstream: sin configurar"
-  fi
-
-  git -C "$repo_path" status --short
-
   if [[ "$mode" == "--status" || "$mode" == "status" ]]; then
-    return
-  fi
-
-  if [[ -z "$branch" ]]; then
-    echo "ERROR: $label no esta en una rama local; no se actualiza." >&2
-    failed=1
-    return
-  fi
-
-  if ! git -C "$repo_path" fetch --prune; then
-    echo "ERROR: no se pudo hacer fetch en $label." >&2
-    failed=1
-    return
-  fi
-
-  if [[ -n "$upstream" ]]; then
-    if ! git -C "$repo_path" pull --rebase --autostash; then
-      echo "ERROR: pull --rebase fallo en $label. Revisa conflictos en $repo_path." >&2
-      failed=1
-      return
-    fi
+    bash "$git_tools" update-path --repo "$repo_path" --remote "${REMOTE:-origin}" --label "$label" --status
   else
-    if ! git -C "$repo_path" pull --rebase --autostash origin "$branch"; then
-      echo "ERROR: pull --rebase origin $branch fallo en $label. Revisa conflictos en $repo_path." >&2
-      failed=1
-      return
-    fi
+    bash "$git_tools" update-path --repo "$repo_path" --remote "${REMOTE:-origin}" --label "$label"
   fi
-
-  git -C "$repo_path" status --short
 }
+
+failed=0
 
 for env_name in "${environments[@]}"; do
   for repo_name in "${required_repos[@]}"; do
-    update_repo "$env_name/$repo_name" "$env_name/$repo_name"
+    update_repo "$project_root/$env_name/$repo_name" "$env_name/$repo_name" || failed=1
   done
 
   for repo_name in "${optional_repos[@]}"; do
-    if [[ -d "$env_name/$repo_name" ]]; then
-      update_repo "$env_name/$repo_name" "$env_name/$repo_name"
+    if [[ -d "$project_root/$env_name/$repo_name" ]]; then
+      update_repo "$project_root/$env_name/$repo_name" "$env_name/$repo_name" || failed=1
     fi
   done
 done
