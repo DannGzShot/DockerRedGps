@@ -11,9 +11,27 @@ Uso:
   git-tools.sh create-branch --repo RUTA --branch RAMA [--base RAMA] [--remote REMOTO]
   git-tools.sh create-branch-repo --workspace RUTA --name REPO --branch RAMA [--base RAMA] [--remote REMOTO]
   git-tools.sh reset-repo --workspace RUTA --name REPO [--remote REMOTO] [--yes]
+  git-tools.sh shell-help
 
 Compatibilidad: gc, update_repos, update_repo, create_branch,
 create_branch_repo y reset_repo aceptan sus argumentos posicionales anteriores.
+EOF
+}
+
+shell_help() {
+  cat <<'EOF'
+Comandos Git de Bash:
+  gc "[FIX] Mensaje"                    Prepara, crea y publica un commit del repo actual.
+  update_repos                          Actualiza solo los repos REDGPS configurados dentro de la carpeta actual.
+  update_repo commons                   Actualiza un repositorio configurado dentro de la carpeta actual.
+  create_branch nueva-rama              Actualiza BASE_BRANCH y crea/publica una rama en el repo actual.
+  create_branch_repo commons nueva-rama Crea/publica una rama en un repositorio configurado de la carpeta actual.
+  reset_repo commons                    Pide RESET y restaura cambios rastreados contra la rama remota.
+  git_help                              Muestra esta ayuda.
+
+Variables opcionales: WORKSPACE, REPOS, BASE_BRANCH y REMOTE.
+update_repos no recorre directorios arbitrarios: solo usa REPOS, que por defecto es
+alertas partners redgps reportes commons atomic api.
 EOF
 }
 
@@ -529,6 +547,9 @@ done
 case "$command_name" in
   help|-h|--help)
     usage
+    ;;
+  shell-help)
+    shell_help
     ;;
   commit)
     if [[ -z "$message" ]]; then

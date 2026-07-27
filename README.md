@@ -18,5 +18,5 @@ Guia completa de instalacion automatica, manual y diagnostico:
 Herramientas Git versionadas y su ayuda rapida:
 
 ```bash
-make help
+make git-help
 ```

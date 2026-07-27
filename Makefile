@@ -6,13 +6,6 @@
 export
 
 PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-GIT_TOOLS := $(PROJECT_ROOT)/bin/git-tools.sh
-WORKSPACE ?= $(PROJECT_ROOT)
-GIT_REPO ?= $(PROJECT_ROOT)
-BASE_BRANCH ?= master
-REMOTE ?= origin
-REPOS ?= alertas partners redgps reportes commons atomic api
-RESET_CONFIRM_FLAG := $(if $(filter 1 yes YES true TRUE,$(CONFIRM)),--yes,)
 
 SSHUTTLE_REMOTE ?= qa
 SSH_CONFIG ?= $(shell printf '%s/.ssh/config' "$$HOME")
@@ -33,8 +26,7 @@ CACHE_SERVER_FILES ?= cache_servers_.json cache_servers_ALERTA.json cache_server
 PYTHON ?= python3
 QA_AUTOLOAD_MEMORY_LIMIT ?= 256M
 
-.PHONY: help commit update-repos update-repo create-branch create-branch-repo reset-repo \
-	up build down ps config \
+.PHONY: git-help up build down ps config \
 	setup-wizard setup-wizard-dry-run doctor-qa \
 	install-tools install-tools-linux install-tools-mac doctor hosts-print hosts-install \
 	app-repos-status app-repos-pull app-repos-pull-dev app-repos-pull-qa \
@@ -44,42 +36,8 @@ QA_AUTOLOAD_MEMORY_LIMIT ?= 256M
 	logs-clear logs-clear-dev logs-clear-qa logs-clear-gateway logs-clear-master \
 	certs certs-install certs-install-linux certs-install-mac redis-config-qa cache-servers-qa cache-autoload-qa setup-qa vpn-qa
 
-help:
-	@printf '%s\n' \
-		'Comandos Git versionados:' \
-		'  make commit MSG="[FIX] Corrige validacion"' \
-		'  make update-repos' \
-		'  make update-repo REPO=commons' \
-		'  make create-branch BRANCH=actualizacion-sistema' \
-		'  make create-branch-repo REPO=commons BRANCH=actualizacion-sistema' \
-		'  make reset-repo REPO=commons' \
-		'' \
-		'Variables: WORKSPACE, GIT_REPO, BASE_BRANCH, REMOTE, REPOS y CONFIRM=1 para reset no interactivo.' \
-		'Consulta docs/docker-local-redgps.md para la referencia completa.'
-
-commit:
-	@test -n "$${MSG:-}" || { echo 'Falta MSG. Ejemplo: make commit MSG="[FIX] Corrige validacion"'; exit 2; }
-	bash "$(GIT_TOOLS)" commit --repo "$${GIT_REPO}" --remote "$${REMOTE}" --message "$${MSG}"
-
-update-repos:
-	bash "$(GIT_TOOLS)" update-repos --workspace "$${WORKSPACE}" --repos "$${REPOS}" --remote "$${REMOTE}"
-
-update-repo:
-	@test -n "$${REPO:-}" || { echo 'Falta REPO. Ejemplo: make update-repo REPO=commons'; exit 2; }
-	bash "$(GIT_TOOLS)" update-repo --workspace "$${WORKSPACE}" --name "$${REPO}" --remote "$${REMOTE}"
-
-create-branch:
-	@test -n "$${BRANCH:-}" || { echo 'Falta BRANCH. Ejemplo: make create-branch BRANCH=actualizacion-sistema'; exit 2; }
-	bash "$(GIT_TOOLS)" create-branch --repo "$${GIT_REPO}" --branch "$${BRANCH}" --base "$${BASE_BRANCH}" --remote "$${REMOTE}"
-
-create-branch-repo:
-	@test -n "$${REPO:-}" || { echo 'Falta REPO. Ejemplo: make create-branch-repo REPO=commons BRANCH=actualizacion-sistema'; exit 2; }
-	@test -n "$${BRANCH:-}" || { echo 'Falta BRANCH. Ejemplo: make create-branch-repo REPO=commons BRANCH=actualizacion-sistema'; exit 2; }
-	bash "$(GIT_TOOLS)" create-branch-repo --workspace "$${WORKSPACE}" --name "$${REPO}" --branch "$${BRANCH}" --base "$${BASE_BRANCH}" --remote "$${REMOTE}"
-
-reset-repo:
-	@test -n "$${REPO:-}" || { echo 'Falta REPO. Ejemplo: make reset-repo REPO=commons'; exit 2; }
-	bash "$(GIT_TOOLS)" reset-repo --workspace "$${WORKSPACE}" --name "$${REPO}" --remote "$${REMOTE}" $(RESET_CONFIRM_FLAG)
+git-help:
+	bash "$(PROJECT_ROOT)/bin/git-tools.sh" shell-help
 
 up:
 	docker compose up -d

@@ -279,70 +279,53 @@ make app-repos-pull-dev
 
 Estos comandos recorren los repos conocidos dentro de `qa/` o `dev/` y ejecutan `git pull --rebase --autostash`. Si hay cambios locales, Git los guarda temporalmente y los restaura despues del pull. Si aparece un conflicto, el comando se detiene y debes resolverlo dentro del repo indicado.
 
-## Herramientas Git versionadas
+## Comandos Git de Bash
 
-Las operaciones Git personales se versionan en `bin/git-tools.sh` y se ejecutan en el host, nunca dentro de un contenedor. Requieren Bash y Git con soporte para `git switch`; funcionan en Linux y WSL. No cargan aliases de una sesion interactiva ni modifican la configuracion global de Git.
+Las operaciones Git se ejecutan en el host mediante `bin/git-tools.sh`. El instalador `make setup-wizard` pregunta si debe añadir un bloque administrado a `~/.bashrc` que carga `bin/git-tools-shell.sh`; no copia funciones personales, credenciales ni modifica la configuracion global de Git.
+
+Antes de agregar el bloque, revisa `~/.bashrc` y los archivos personales cargados con `source`. Si un alias, funcion o ejecutable ya usa un nombre, no lo reemplaza: lo informa al final y agrega solamente los comandos sin conflicto. Si mas adelante eliminas un comando en conflicto, el bloque versionado lo habilita al abrir una terminal nueva.
 
 ```text
 bin/
-└── git-tools.sh                 Operaciones Git compartidas
+├── git-tools.sh                 Operaciones Git compartidas
+└── git-tools-shell.sh           Funciones Bash cargadas por ~/.bashrc
+docker/bin/setup-wizard          Instalador interactivo y detector de conflictos
 docker/bin/update-app-repos      Adaptador para los repos DEV y QA existentes
-Makefile                         Interfaz de los comandos
 ```
 
-Consulta el resumen desde la raiz del repositorio:
+Ejecuta el asistente de forma interactiva y acepta la pregunta correspondiente:
 
 ```bash
-make help
+make setup-wizard
 ```
 
-Comandos disponibles:
+Al terminar, muestra cuáles comandos agregó, cuáles omitió y la razón. Abre una terminal nueva o ejecuta `source ~/.bashrc`. Consulta el resumen sin modificar nada con:
 
 ```bash
-make commit MSG="[FIX] Corrige validacion"
-make update-repos
-make update-repo REPO=commons
-make create-branch BRANCH=actualizacion-sistema
-make create-branch-repo REPO=commons BRANCH=actualizacion-sistema
-make reset-repo REPO=commons
+make git-help
 ```
 
-`commit` ejecuta `fetch --prune`, actualiza la rama con `pull --rebase --autostash` si ya tiene upstream, prepara todos los cambios con `git add -A`, evita commits vacios y publica la rama. El mensaje incluye emoji, etiqueta y fecha/hora. Reconoce, entre otras, las etiquetas `[FIX]`, `[FEAT]`, `[SECURITY]`, `[DOCS]`, `[DB]`, `[INFRA]`, `[CONFIG]`, `[REFACTOR]`, `[TEST]`, `[CI]`, `[WIP]` y `[RELEASE]`.
-
-`update-repos` opera sobre los repositorios hijo de `WORKSPACE`; cada uno debe ser un repositorio Git valido con una rama local y un remoto configurado. `update-repo`, `create-branch-repo` y `reset-repo` seleccionan uno de ellos con `REPO`. La creacion de ramas valida el nombre con `git check-ref-format --branch`, comprueba que no exista local ni remotamente, actualiza la rama base y publica la nueva rama con upstream.
-
-Variables configurables mediante `make` o el entorno:
-
-```bash
-make WORKSPACE=/ruta/de/proyectos REPOS="alertas partners redgps reportes commons atomic api" update-repos
-make WORKSPACE=/ruta/de/proyectos REPO=commons BASE_BRANCH=master REMOTE=origin create-branch-repo BRANCH=actualizacion-sistema
-make GIT_REPO=/ruta/de/un-repo BASE_BRANCH=main create-branch BRANCH=actualizacion-sistema
-```
-
-| Variable | Valor predeterminado | Uso |
+| Comando | Uso | Función |
 |---|---|---|
-| `WORKSPACE` | raiz de este repositorio | Directorio que contiene los repositorios indicados en `REPOS`. |
-| `GIT_REPO` | raiz de este repositorio | Repositorio para `commit` y `create-branch`. |
-| `REPOS` | `alertas partners redgps reportes commons atomic api` | Lista separada por espacios para `update-repos`. |
-| `REPO` | sin valor | Repositorio hijo elegido por los comandos `*-repo`. |
-| `BASE_BRANCH` | `master` | Rama base para crear una rama nueva. |
-| `REMOTE` | `origin` | Remoto que se consulta y publica. |
-| `CONFIRM` | sin valor | Usa `CONFIRM=1` solo para confirmar de forma explicita un reset no interactivo. |
+| `gc` | `gc "[FIX] Mensaje"` | En el repositorio actual: hace `fetch --prune`, `pull --rebase --autostash` si existe upstream, `git add -A`, evita commits vacíos y publica el commit. Añade emoji, etiqueta y fecha/hora. |
+| `update_repos` | `update_repos` | Desde una carpeta padre, actualiza solo los repositorios REDGPS configurados y en su rama actual; no recorre directorios ajenos. |
+| `update_repo` | `update_repo commons` | Actualiza un repositorio REDGPS específico de la carpeta actual. |
+| `create_branch` | `create_branch nueva-rama` | Desde un repositorio, actualiza `BASE_BRANCH`, valida el nombre y crea/publica la rama. |
+| `create_branch_repo` | `create_branch_repo commons nueva-rama` | Crea/publica una rama en un repositorio REDGPS específico de la carpeta actual. |
+| `reset_repo` | `reset_repo commons` | Solicita escribir `RESET` antes de igualar los cambios rastreados con la rama remota; no ejecuta `git clean`. |
+| `git_help` | `git_help` | Muestra este resumen en la terminal. |
 
-`make reset-repo REPO=commons` solicita escribir `RESET` antes de ejecutar `git reset --hard` contra la rama remota actual. Descarta cambios locales rastreados, conserva archivos no rastreados y nunca ejecuta `git clean`. En automatizaciones sin terminal debes indicar la confirmacion explicita:
+`gc` reconoce, entre otras, las etiquetas `[FIX]`, `[FEAT]`, `[SECURITY]`, `[DOCS]`, `[DB]`, `[INFRA]`, `[CONFIG]`, `[REFACTOR]`, `[TEST]`, `[CI]`, `[WIP]` y `[RELEASE]`.
 
-```bash
-make CONFIRM=1 reset-repo REPO=commons
-```
-
-Tambien se conservan los comandos Docker existentes `make app-repos-status`, `make app-repos-pull-dev` y `make app-repos-pull-qa`; ahora reutilizan el mismo script versionado para validar repositorios, remotos y ramas.
-
-Para invocacion directa, `bin/git-tools.sh` mantiene compatibilidad con los nombres previos `gc`, `update_repos`, `update_repo`, `create_branch`, `create_branch_repo` y `reset_repo`:
+`update_repos` solo considera los nombres configurados en `REPOS`: por defecto `alertas partners redgps reportes commons atomic api`. Puedes ajustar el comportamiento por terminal sin editar archivos:
 
 ```bash
-bash /ruta/al/repositorio/bin/git-tools.sh gc "[DOCS] Actualiza la guia"
-bash /ruta/al/repositorio/bin/git-tools.sh update_repo commons
+REPOS="redgps partners commons" update_repos
+BASE_BRANCH=main create_branch nueva-rama
+REMOTE=upstream update_repo commons
 ```
+
+Los comandos Docker `make app-repos-status`, `make app-repos-pull-dev` y `make app-repos-pull-qa` se conservan y reutilizan la misma validacion Git.
 
 ## Instalacion automatica recomendada
 

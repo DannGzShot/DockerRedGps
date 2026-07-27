@@ -11,6 +11,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import socket
 import ssl
@@ -149,6 +150,19 @@ PLACEHOLDER_VALUES = {
     "your_mysql_password",
 }
 
+GIT_SHELL_COMMANDS = [
+    ("gc", "Crea y publica un commit del repositorio actual.", 'gc "[FIX] Mensaje"'),
+    ("update_repos", "Actualiza los repositorios REDGPS configurados en la carpeta actual.", "update_repos"),
+    ("update_repo", "Actualiza un repositorio REDGPS de la carpeta actual.", "update_repo commons"),
+    ("create_branch", "Crea y publica una rama desde BASE_BRANCH en el repositorio actual.", "create_branch nueva-rama"),
+    ("create_branch_repo", "Crea y publica una rama en un repositorio REDGPS de la carpeta actual.", "create_branch_repo commons nueva-rama"),
+    ("reset_repo", "Pide confirmacion y restaura un repositorio contra su rama remota.", "reset_repo commons"),
+    ("git_help", "Muestra el resumen de comandos Git instalados.", "git_help"),
+]
+
+GIT_SHELL_BLOCK_START = "# >>> REDGPS Git tools >>>"
+GIT_SHELL_BLOCK_END = "# <<< REDGPS Git tools <<<"
+
 
 class Wizard:
     def __init__(self, args: argparse.Namespace) -> None:
@@ -158,6 +172,9 @@ class Wizard:
         self.actions_taken: List[str] = []
         self.warnings: List[str] = []
         self.failures: List[str] = []
+        self.git_shell_added: List[Tuple[str, str, str]] = []
+        self.git_shell_existing: List[Tuple[str, str, str]] = []
+        self.git_shell_skipped: Dict[str, str] = {}
         self.qa_autoload_repair_offered = False
         self.system = platform.system()
         self.uid = os.getuid() if hasattr(os, "getuid") else None
@@ -258,6 +275,66 @@ class Wizard:
             key, value = stripped.split("=", 1)
             values[key.strip()] = value.strip().strip("'\"")
         return values
+
+    def check_git_shell_commands(self) -> None:
+        self.step("Configurando comandos Git de Bash")
+        bashrc = Path.home() / ".bashrc"
+        shell_script = self.rel("bin/git-tools-shell.sh")
+
+        if not shell_script.is_file():
+            self.warn("Falta bin/git-tools-shell.sh; no se pueden instalar los comandos Git de Bash.")
+            self.git_shell_skipped = {name: "falta el script versionado" for name, _, _ in GIT_SHELL_COMMANDS}
+            return
+
+        try:
+            bashrc_text = self.read_text(bashrc) if bashrc.exists() else ""
+        except OSError as exc:
+            self.warn(f"No pude leer {bashrc}: {exc}")
+            self.git_shell_skipped = {name: "no se pudo leer ~/.bashrc" for name, _, _ in GIT_SHELL_COMMANDS}
+            return
+
+        if GIT_SHELL_BLOCK_START in bashrc_text and GIT_SHELL_BLOCK_END in bashrc_text:
+            self.info("El bloque REDGPS Git tools ya esta configurado en ~/.bashrc.")
+            self.git_shell_existing = list(GIT_SHELL_COMMANDS)
+            return
+
+        definitions = bash_command_definitions(bashrc, Path.home()) if bashrc.exists() else {}
+        candidates: List[Tuple[str, str, str]] = []
+        for name, description, example in GIT_SHELL_COMMANDS:
+            source = definitions.get(name)
+            if source is not None:
+                self.git_shell_skipped[name] = f"ya existe como alias o funcion en {source}"
+            elif shutil.which(name):
+                self.git_shell_skipped[name] = f"ya existe un ejecutable llamado {name} en PATH"
+            else:
+                candidates.append((name, description, example))
+
+        if not candidates:
+            self.info("No se agregaron comandos Git de Bash porque todos tienen un conflicto existente.")
+            return
+
+        names = ", ".join(name for name, _, _ in candidates)
+        self.info(f"Se pueden agregar a ~/.bashrc sin reemplazar comandos existentes: {names}")
+        if not self.ask("Agregar estos comandos Git de Bash a ~/.bashrc?"):
+            for name, _, _ in candidates:
+                self.git_shell_skipped[name] = "el usuario eligio no agregarlo"
+            return
+
+        block = bash_source_block(shell_script)
+        content = bashrc_text
+        if content and not content.endswith(("\n", "\r")):
+            content += "\n"
+        try:
+            self.write_text(bashrc, content + block)
+        except OSError as exc:
+            self.warn(f"No pude actualizar {bashrc}: {exc}")
+            for name, _, _ in candidates:
+                self.git_shell_skipped[name] = "no se pudo escribir ~/.bashrc"
+            return
+
+        self.git_shell_added = candidates
+        self.action("Agregado el bloque REDGPS Git tools a ~/.bashrc")
+        self.info("Abre una terminal nueva o ejecuta source ~/.bashrc para cargar los comandos.")
 
     def ensure_dir(self, path: Path) -> None:
         if path.exists():
@@ -1404,6 +1481,20 @@ echo json_encode(array(
         else:
             self.say("No se aplicaron cambios.")
 
+        if self.git_shell_added or self.git_shell_existing or self.git_shell_skipped:
+            self.say("")
+            self.say("Comandos Git de Bash:")
+            for name, description, example in self.git_shell_added:
+                self.say(f"  - Agregado {name}: {description}")
+                self.say(f"    Uso: {example}")
+            for name, description, example in self.git_shell_existing:
+                self.say(f"  - Ya configurado {name}: {description}")
+                self.say(f"    Uso: {example}")
+            for name, _, _ in GIT_SHELL_COMMANDS:
+                reason = self.git_shell_skipped.get(name)
+                if reason:
+                    self.say(f"  - No agregado {name}: {reason}")
+
         if self.warnings:
             self.say("")
             self.say("Avisos pendientes:")
@@ -1427,6 +1518,7 @@ echo json_encode(array(
 
         self.check_os_and_tools()
         self.check_project_structure()
+        self.check_git_shell_commands()
         self.check_env_files()
         self.check_hosts()
         self.check_certs()
@@ -1448,6 +1540,65 @@ def walk_limited(start: Path, limit: int) -> Iterable[Path]:
             yielded += 1
             if yielded >= limit:
                 return
+
+
+def bash_command_definitions(path: Path, home: Path, visited: Optional[set[Path]] = None) -> Dict[str, Path]:
+    visited = visited if visited is not None else set()
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return {}
+    if resolved in visited or not resolved.is_file():
+        return {}
+    visited.add(resolved)
+
+    try:
+        content = resolved.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+
+    definitions: Dict[str, Path] = {}
+    for line in content.splitlines():
+        for pattern in [
+            r"^\s*alias\s+([A-Za-z_][A-Za-z0-9_]*)=",
+            r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)",
+            r"^\s*function\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+        ]:
+            match = re.match(pattern, line)
+            if match:
+                definitions.setdefault(match.group(1), resolved)
+                break
+        source_path = bash_source_path(line, resolved.parent, home)
+        if source_path is not None:
+            for name, source in bash_command_definitions(source_path, home, visited).items():
+                definitions.setdefault(name, source)
+    return definitions
+
+
+def bash_source_path(line: str, base: Path, home: Path) -> Optional[Path]:
+    match = re.match(r"^\s*(?:source|\.)\s+((?:\"[^\"]+\"|'[^']+'|[^\s#;]+))", line)
+    if not match:
+        return None
+    value = match.group(1).strip("'\"")
+    value = value.replace("${HOME}", str(home)).replace("$HOME", str(home))
+    if value == "~":
+        value = str(home)
+    elif value.startswith("~/"):
+        value = str(home / value[2:])
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(home.resolve())
+    except (OSError, ValueError):
+        return None
+    return resolved
+
+
+def bash_source_block(script_path: Path) -> str:
+    quoted_path = shlex.quote(str(script_path))
+    return f"\n{GIT_SHELL_BLOCK_START}\n[ -f {quoted_path} ] && . {quoted_path}\n{GIT_SHELL_BLOCK_END}\n"
 
 
 def last_line(text: str) -> str:
