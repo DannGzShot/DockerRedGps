@@ -105,12 +105,15 @@ DOCKER_DIRS = [
     "docker/ssh",
     "docker/var-cache/config",
     "docker/var-cache/files/autoloads",
+    "docker/var-cache/files/api_tokens",
     "docker/var-cache/files/cache_servidores",
     "docker/var-cache/files/logs_to_save",
     "docker/var-cache/languages",
     "docker/var-cache/logs",
     "docker/var-cache/metadata",
     "docker/var-cache/recursosEstaticos",
+    "dev/redgps/public/cache/placas",
+    "qa/redgps/public/cache/placas",
 ]
 
 BACKEND_VHOST_FILES = [
