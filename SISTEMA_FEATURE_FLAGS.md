@@ -16,38 +16,31 @@ El sistema de feature flags permite habilitar o deshabilitar funcionalidades de 
 La configuración debe vivir en un solo lugar:
 
 ```text
-qa/commons/App/Features/Config/features.php
+/commons/App/Features/Config/features.php
 ```
 
 El código que consume una feature sólo debe preguntar si está activa. No debe volver a implementar listas de IDs, validaciones de sesión, hostnames o cookies.
 
-> ✅ **Idea principal:** las reglas viven en `features.php`; PHP y JavaScript solamente consultan el resultado.
+> ✅ **Idea principal:** las reglas viven en `features.php`; PHP, Smarty y JavaScript solamente consultan el resultado.
 
 ## 🚀 Inicio rápido
 
 Para crear y utilizar una feature nueva:
 
-1. Declara sus reglas en `qa/commons/App/Features/Config/features.php`.
+1. Declara sus reglas en `/commons/App/Features/Config/features.php`.
 2. En PHP consulta `Feature::enabled('NOMBRE_FEATURE')`.
-3. En JavaScript consulta `SelfUtils.featureEnabled('NOMBRE_FEATURE')`.
-4. Conserva el comportamiento actual cuando la feature devuelva `false`.
-5. Prueba un caso permitido y otro no permitido antes de liberar el cambio.
+3. En Smarty consulta `{if 'NOMBRE_FEATURE'|feature}...{/if}`.
+4. En JavaScript consulta `SelfUtils.featureEnabled('NOMBRE_FEATURE')`.
+5. Conserva el comportamiento actual cuando la feature devuelva `false`.
+6. Prueba un caso permitido y otro no permitido antes de liberar el cambio.
 
 Ejemplo mínimo:
 
 ```php
 // features.php
 'NUEVO_FLUJO' => [
-    'docs' => [
-        'description' => 'Habilita el nuevo flujo de ejemplo.',
-        'url' => null,
-    ],
     'include' => [
-        [
-            'distribuidores' => [
-                38875,
-            ],
-        ],
+        ['distribuidores' => [38875]],
     ],
 ],
 ```
@@ -61,40 +54,6 @@ if (\App\Features\Feature::enabled('NUEVO_FLUJO')) {
 ```
 
 > ⚠️ **Regla de seguridad:** una feature flag controla un despliegue, no reemplaza permisos, autenticación ni autorización.
-
-## 🧩 Arquitectura
-
-```text
-features.php
-    │
-    ▼
-Feature
-    │
-    ▼
-FeatureManager
-    │
-    ▼
-FeatureContextResolver
-    ├── DatosPlataformaHelper
-    ├── HTTP_HOST
-    └── cookies de la petición
-
-Backend PHP
-    └── Feature::enabled() / Feature::value()
-
-Frontend JavaScript
-    └── FeatureBootstrap → window.AppFeatures → SelfUtils.featureEnabled()
-```
-
-Los componentes se encuentran en:
-
-- `qa/commons/App/Features/Feature.php`: API pública para PHP.
-- `qa/commons/App/Features/FeatureManager.php`: evaluación de reglas.
-- `qa/commons/App/Features/FeatureContext.php`: datos utilizados durante la evaluación.
-- `qa/commons/App/Features/FeatureContextResolver.php`: obtiene distribuidor, cliente, usuario, hostname y cookies.
-- `qa/commons/App/Features/FeatureBootstrap.php`: publica una vez las features al inicio del documento HTML.
-- `qa/commons/App/Features/Config/features.php`: definiciones de las features.
-- `qa/commons/media/js/self_utils.js`: permite consultar las features desde JavaScript.
 
 ## 🐘 API para PHP
 
@@ -147,8 +106,6 @@ Devuelve todas las features configuradas con su valor booleano para el contexto 
 ]
 ```
 
-`FeatureBootstrap` utiliza este método una sola vez por petición para construir `window.AppFeatures`.
-
 ### ¿Qué método PHP debo usar?
 
 | Necesidad | Método | Resultado |
@@ -156,6 +113,42 @@ Devuelve todas las features configuradas con su valor booleano para el contexto 
 | Condición o decisión interna | `Feature::enabled()` | `true` o `false` |
 | Contrato que exige enteros | `Feature::value()` | `1` o `0` |
 | Publicar el conjunto de features | `Feature::all()` | Arreglo de booleanos |
+
+## 🖼️ API para templates Smarty
+
+Los templates pueden consultar una feature directamente mediante el modificador global `feature`, sin recibir una variable desde el controlador:
+
+```smarty
+{if 'MEJORA_TIPO_COMANDO'|feature}
+    {* Contenido de la funcionalidad nueva *}
+{/if}
+```
+
+El valor situado a la izquierda de `|feature` es el nombre de la feature. El modificador llama a `Feature::enabled()` y devuelve un booleano para el distribuidor, cliente, usuario, hostname y cookies de la petición actual.
+
+También puede utilizarse un nombre almacenado en una variable:
+
+```smarty
+{if $nombreFeature|feature}
+    {* Contenido habilitado *}
+{/if}
+```
+
+Una feature inexistente, un nombre vacío o un error durante la evaluación devuelven `false`. Los resultados se conservan durante la petición para evitar reevaluar una misma feature varias veces.
+
+Esta condición no consulta `window.AppFeatures`: Smarty se ejecuta en el servidor antes de que el navegador reciba y ejecute `FeatureBootstrap`.
+
+No se debe utilizar solamente una cadena como condición:
+
+```smarty
+{if 'MEJORA_TIPO_COMANDO'}
+    {* Siempre se mostraría porque la cadena no está vacía *}
+{/if}
+```
+
+El modificador controla la presentación, pero no reemplaza las validaciones del backend. Las operaciones protegidas deben consultar también `Feature::enabled()` antes de ejecutarse.
+
+> ⚠️ Las vistas con caché de salida de Smarty deben separar el caché por contexto de distribuidor, cliente y usuario, o excluir del caché los bloques que dependan de features. El caché de compilación de templates no presenta este problema.
 
 ## 🌐 API para JavaScript
 
@@ -186,7 +179,7 @@ SelfUtils.habilitarMapaParaDistribuidores()
 
 Tampoco deben agregarse listas de distribuidores, clientes, usuarios, hosts o cookies en JavaScript. Las reglas pertenecen a `features.php`.
 
-> ✅ `SelfUtils.featureEnabled()` sí forma parte del diseño correcto. Lo que debe evitarse es crear un método nuevo dentro de `SelfUtils` por cada feature.
+> Debe evitarse crear un método nuevo dentro de `SelfUtils` por cada feature.
 
 ## ⚙️ Reglas de evaluación
 
@@ -267,27 +260,6 @@ Feature inexistente ───────────────► false
 
 > ✅ `distribuidores`, `clientes`, `usuarios`, `hostnames` y `cookies` siempre se escriben como listas simples.
 
-Al crear `FeatureManager`, las listas se validan y se convierten una sola vez en conjuntos internos optimizados. Por ejemplo:
-
-```php
-[
-    1510,
-    1510,
-    38875,
-]
-```
-
-se convierte internamente en el equivalente de:
-
-```php
-[
-    1510 => true,
-    38875 => true,
-]
-```
-
-Esto permite una configuración breve, elimina duplicados y conserva las búsquedas directas por llave. El formato interno no debe escribirse manualmente en `features.php`.
-
 ### 📚 Metadatos de documentación
 
 Cada feature puede incluir una llave `docs` con información para los desarrolladores:
@@ -340,7 +312,6 @@ No se debe combinar `all` con un `include` de hostnames esperando limitar la fea
 ```
 
 Los IDs se escriben como una lista simple. `FeatureManager` elimina duplicados y convierte internamente la lista en un conjunto optimizado para búsquedas.
-
 
 ### 👥 Por cliente
 
@@ -472,9 +443,9 @@ Las cookies son controladas por el cliente. Por esa razón:
 - no deben utilizarse para permisos, autenticación, autorización o protección de información;
 - una feature sensible debe tener controles de seguridad independientes.
 
-### 🌐🍪 Hostname o cookie
+### 🌐🍪 Combinaciones OR y AND
 
-Para permitir el hostname normal y conservar una activación temporal mediante cookie, deben utilizarse dos grupos:
+Para permitir un hostname **o** una cookie se utilizan grupos separados:
 
 ```php
 'MI_FEATURE' => [
@@ -493,18 +464,7 @@ Para permitir el hostname normal y conservar una activación temporal mediante c
 ],
 ```
 
-El resultado es:
-
-| Host permitido | Cookie habilitada | Resultado |
-|---|---:|---:|
-| Sí | No | Activa |
-| Sí | Sí | Activa |
-| No | Sí | Activa |
-| No | No | Inactiva |
-
-Esto preserva el patrón de activación por cookie utilizado por los hacks de `Profiler`, pero sólo para las cookies declaradas explícitamente.
-
-Si hostname y cookie se colocan dentro del mismo grupo, la relación cambia a AND:
+Si ambos criterios se colocan dentro del mismo grupo, la relación es **AND** y deben coincidir simultáneamente:
 
 ```php
 'include' => [
@@ -519,29 +479,7 @@ Si hostname y cookie se colocan dentro del mismo grupo, la relación cambia a AN
 ],
 ```
 
-En ese caso se requieren tanto el hostname permitido como la cookie habilitada.
-
-### 🏢🍪 Distribuidor o cookie
-
-```php
-'MI_FEATURE' => [
-    'include' => [
-        [
-            'distribuidores' => [
-                485,
-                470,
-            ],
-        ],
-        [
-            'cookies' => [
-                'MI_FEATURE_TEMPORAL',
-            ],
-        ],
-    ],
-],
-```
-
-Este formato reemplaza los hacks mixtos de `Profiler` sin repetir lógica PHP.
+La misma regla aplica a cualquier combinación de distribuidores, clientes, usuarios, hostnames y cookies.
 
 ### ⛔ Exclusiones
 
@@ -602,159 +540,38 @@ Para combinar grupos se utiliza `array_merge()`:
 
 Los IDs repetidos entre los grupos se eliminan durante la normalización interna. De esta forma, agregar o retirar un distribuidor del grupo no requiere modificar todas las features que lo utilizan.
 
-## 🛡️ Hostnames y comportamiento normal
-
-El motor ya cumple la regla de aislamiento por hostname:
-
-```text
-¿El hostname está permitido?
-    Sí  → el grupo de hostname coincide.
-    No  → ese grupo no coincide y se revisa la siguiente alternativa.
-          Si ninguna alternativa coincide, la feature devuelve false.
-```
-
-Cuando la feature devuelve `false`, el consumidor debe mantener el funcionamiento normal mediante el `else` o la ruta existente:
-
-```php
-if (\App\Features\Feature::enabled('NUEVO_FLUJO')) {
-    ejecutarNuevoFlujo();
-} else {
-    ejecutarFlujoActual();
-}
-```
-
-Otra feature no activa ésta automáticamente. Si dos features deben ser alternativas, puede representarse la regla dentro de una sola definición o expresarse de forma explícita en el consumidor:
-
-```php
-if (
-    \App\Features\Feature::enabled('NUEVO_FLUJO')
-    || \App\Features\Feature::enabled('HABILITACION_TEMPORAL')
-) {
-    ejecutarNuevoFlujo();
-}
-```
-
-`TODAS_LAS_MEJORAS` no tiene un tratamiento especial en el motor. Actualmente es una feature independiente y no habilita automáticamente las demás.
-
-> 💡 **Importante:** otra feature no activa ésta por compartir hostname, cookie o distribuidor. Cada feature se evalúa de manera independiente.
-
 ## ✨ Ventajas frente a hacks en helpers
 
-### 📍 Una sola fuente de verdad
+- **Una sola fuente de verdad:** las reglas viven en `features.php`, no repartidas entre helpers, controladores, plantillas y JavaScript.
+- **Misma evaluación en backend y frontend:** PHP calcula las features y JavaScript consume el resultado.
+- **API genérica:** no se crea un método específico por cada feature.
+- **Comportamiento seguro por defecto:** una feature inexistente, sin reglas o sin coincidencias devuelve `false`.
+- **Despliegue progresivo:** una funcionalidad puede avanzar de cookie de desarrollo a QA, beta y activación global modificando sólo la configuración.
+- **Reglas auditables y reutilizables:** los grupos compartidos reducen duplicación y facilitan retirar una feature cuando deja de ser necesaria.
 
-Las reglas ya no quedan repartidas entre `UtilsHelper`, `Profiler`, controladores, plantillas y JavaScript.
+## 🧭 Buenas prácticas de integración
 
-### 🔄 Misma evaluación en backend y frontend
+`UtilsHelper` y otros helpers siguen siendo apropiados para operaciones reutilizables, transformación de datos, formatos, cálculos o interacción con APIs. Las reglas de rollout no deben vivir en ellos.
 
-PHP calcula las features y JavaScript recibe los resultados. No es necesario mantener dos listas de IDs o reproducir la lógica de sesiones en el navegador.
-
-### 🧹 Menos métodos específicos
-
-No se necesita crear un método PHP o JavaScript por cada mejora. Todas utilizan la misma API:
-
-```php
-Feature::enabled('NOMBRE_FEATURE')
-```
-
-```javascript
-SelfUtils.featureEnabled('NOMBRE_FEATURE')
-```
-
-### 🔒 Comportamiento seguro por defecto
-
-Una feature inexistente, sin reglas o sin coincidencias devuelve `false`. El código nuevo no se activa accidentalmente.
-
-### 📈 Despliegues progresivos
-
-Una funcionalidad puede pasar gradualmente por:
-
-1. cookie de desarrollo;
-2. hostname de QA;
-3. distribuidores beta;
-4. grupo de producción;
-5. activación global.
-
-El código de la funcionalidad no cambia durante esas etapas; sólo cambia su configuración.
-
-### 🔍 Reglas auditables
-
-La configuración muestra claramente quién recibe una feature, qué exclusiones existen y qué mecanismos temporales pueden habilitarla.
-
-### ♻️ Reutilización de grupos
-
-Los distribuidores de QA, beta o producción pueden mantenerse en grupos compartidos sin duplicarlos en cada hack.
-
-### 🗑️ Migración y eliminación más sencillas
-
-Una vez liberada una feature para todos se puede configurar con `all`. Cuando el código anterior sea retirado, también puede eliminarse la condición y posteriormente la entrada de configuración.
-
-## 🧭 Qué debe permanecer en `UtilsHelper` y `SelfUtils`
-
-Los helpers siguen siendo apropiados para operaciones reutilizables, transformación de datos, formatos, cálculos o interacción con APIs.
-
-No son el lugar adecuado para reglas de despliegue como:
-
-```php
-if (in_array($distribuidor, [485, 470, 38875])) {
-    // Mejora temporal
-}
-```
-
-`SelfUtils.featureEnabled()` sí debe permanecer: es el adaptador genérico del frontend. Lo que debe evitarse es agregar dentro de `SelfUtils` una función nueva por feature o duplicar en JavaScript las reglas declaradas en PHP.
-
-### ✅ Correcto e incorrecto
+`SelfUtils.featureEnabled()` sí debe permanecer porque es el adaptador genérico del frontend. No deben agregarse funciones específicas por feature ni duplicarse en JavaScript las reglas declaradas en PHP.
 
 | ✅ Correcto | ❌ Evitar |
 |---|---|
 | Reglas centralizadas en `features.php` | IDs repetidos en controladores y helpers |
 | `Feature::enabled('NOMBRE_FEATURE')` en PHP | Un método PHP por cada feature |
 | `SelfUtils.featureEnabled('NOMBRE_FEATURE')` en JavaScript | Reglas de rollout duplicadas en JavaScript |
-| Mantener un camino normal cuando devuelve `false` | Asumir que la feature siempre estará activa |
+| Mantener el camino normal cuando devuelve `false` | Asumir que la feature siempre estará activa |
 | Usar cookies sólo para rollout o pruebas | Usar cookies como permisos de seguridad |
 
 ## 🆕 Proceso recomendado para crear una feature
 
-1. Elegir un nombre descriptivo, estable, en `UPPER_SNAKE_CASE`.
+1. Elegir un nombre descriptivo y estable en `UPPER_SNAKE_CASE`.
 2. Agregar la definición y sus metadatos `docs` en `features.php`.
-3. Definir claramente el comportamiento normal cuando la feature esté desactivada.
-4. Consultarla con `Feature::enabled()` en PHP o `SelfUtils.featureEnabled()` en JavaScript.
-5. Probar al menos un contexto permitido y uno no permitido.
-6. Si utiliza cookie, probar presencia, ausencia y un valor explícito de desactivación.
-7. Si utiliza hostname, probar todos los hosts permitidos y al menos uno no permitido.
-8. Verificar que la funcionalidad anterior continúe operando cuando el resultado sea `false`.
-
-Ejemplo completo:
-
-```php
-'NUEVO_PANEL' => [
-    'include' => [
-        [
-            'hostnames' => [
-                'qa.service24gps.com',
-            ],
-        ],
-        [
-            'distribuidores' => [
-                38875,
-            ],
-        ],
-        [
-            'cookies' => [
-                'NUEVO_PANEL',
-            ],
-        ],
-    ],
-    'exclude' => [
-        [
-            'usuarios' => [
-                5000,
-            ],
-        ],
-    ],
-],
-```
-
-La feature se activa por hostname, distribuidor o cookie, excepto para el usuario excluido.
+3. Definir el comportamiento normal cuando la feature esté desactivada.
+4. Modelar las reglas recordando que los grupos son **OR**, los criterios de un mismo grupo son **AND** y `exclude` tiene prioridad absoluta.
+5. Consultarla con `Feature::enabled()` en PHP o `SelfUtils.featureEnabled()` en JavaScript.
+6. Probar al menos un contexto permitido y uno no permitido. Si utiliza cookie u hostname, probar también sus casos específicos.
+7. Verificar que el comportamiento anterior continúe operando cuando el resultado sea `false`.
 
 ## 🚚 Proceso recomendado para migrar un hack existente
 
@@ -766,8 +583,6 @@ La feature se activa por hostname, distribuidor o cookie, excepto para el usuari
 6. Reemplazar las validaciones JavaScript por `SelfUtils.featureEnabled()`.
 7. Confirmar que ya no existen referencias al helper anterior.
 8. Eliminar el código obsoleto únicamente después de completar y validar la migración.
-
-Durante la transición, `Profiler.php` y sus consumidores pueden permanecer sin cambios mientras las definiciones equivalentes se preparan en `features.php`.
 
 ## ⚠️ Consideraciones y límites
 
